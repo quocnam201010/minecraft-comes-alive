@@ -10,6 +10,7 @@ import net.conczin.mca.entity.ai.navigation.PersistentPathTarget;
 import net.conczin.mca.entity.ai.navigation.TeleportBlockBlacklist;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.tags.BlockTags;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.ai.behavior.MoveToTargetSink;
 import net.minecraft.world.entity.ai.memory.MemoryModuleType;
@@ -138,7 +139,7 @@ public class WanderOrTeleportToTargetTask extends MoveToTargetSink {
         super.tick(world, entity, l);
     }
 
-    private static void tryTeleport(ServerLevel world, Mob entity, BlockPos targetPos) {
+    static boolean tryTeleport(ServerLevel world, Mob entity, BlockPos targetPos) {
         for (int attempt = 0; attempt < 10; attempt++) {
             int dx = entity.getRandom().nextInt(7) - 3;
             int dy = entity.getRandom().nextInt(3) - 1;
@@ -149,16 +150,23 @@ public class WanderOrTeleportToTargetTask extends MoveToTargetSink {
             BlockPos candidate = targetPos.offset(dx, dy, dz);
             if (canTeleportTo(world, entity, candidate)) {
                 entity.teleportTo(candidate.getX() + 0.5D, candidate.getY(), candidate.getZ() + 0.5D);
-                return;
+                return true;
             }
         }
+        return false;
     }
 
     private static boolean canTeleportTo(ServerLevel world, Mob entity, BlockPos pos) {
-        if (WalkNodeEvaluator.getPathTypeStatic(entity, pos.mutable()) != PathType.WALKABLE
+        if (!world.getChunkSource().hasChunk(pos.getX() >> 4, pos.getZ() >> 4)
+                || WalkNodeEvaluator.getPathTypeStatic(entity, pos.mutable()) != PathType.WALKABLE
+                || world.getBlockState(pos.below()).is(BlockTags.LEAVES)
                 || TeleportBlockBlacklist.isBlocked(world.getBlockState(pos.below()))) {
             return false;
         }
-        return world.noCollision(entity, entity.getBoundingBox().move(pos.subtract(entity.blockPosition())));
+        return world.noCollision(entity, entity.getBoundingBox().move(
+                pos.getX() + 0.5D - entity.getX(),
+                pos.getY() - entity.getY(),
+                pos.getZ() + 0.5D - entity.getZ()
+        ));
     }
 }

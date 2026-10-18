@@ -193,6 +193,7 @@ public final class Config extends CommonConfig {
     /**
      * If true, allows stuck villagers to teleport to a safe location.
      * Disabled by default as it can cause villagers to disappear unexpectedly.
+     * Villagers following a player always use wolf-style catch-up teleporting.
      */
     public boolean allowVillagerTeleporting = false;
 

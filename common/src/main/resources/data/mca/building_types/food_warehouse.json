@@ -1,0 +1,10 @@
+{
+  "color": "ff73b655",
+  "visible": true,
+  "priority": 6,
+  "blocks": {
+    "#mca:chests": 8
+  },
+  "iconU": 3,
+  "iconV": 1
+}

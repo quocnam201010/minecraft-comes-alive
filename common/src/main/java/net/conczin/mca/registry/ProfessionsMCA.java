@@ -5,6 +5,8 @@ import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
 import net.conczin.mca.MCA;
 import net.minecraft.core.Holder;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.tags.TagKey;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
@@ -24,6 +26,7 @@ import java.util.Set;
 import java.util.function.Predicate;
 
 public interface ProfessionsMCA {
+    TagKey<VillagerProfession> MILITARY = TagKey.create(Registries.VILLAGER_PROFESSION, MCA.locate("military"));
     Map<Identifier, VillagerProfession> PROFESSIONS = new HashMap<>();
 
     Set<ResourceKey<VillagerProfession>> CAN_NOT_TRADE = new HashSet<>();

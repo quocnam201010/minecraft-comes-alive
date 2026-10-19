@@ -13,6 +13,8 @@ import net.conczin.mca.entity.ai.relationship.RelationshipState;
 import net.conczin.mca.item.BabyItem;
 import net.conczin.mca.registry.DataComponentsMCA;
 import net.conczin.mca.registry.EntitiesMCA;
+import net.conczin.mca.resources.Rank;
+import net.minecraft.commands.SharedSuggestionProvider;
 import net.conczin.mca.server.SpawnQueue;
 import net.conczin.mca.server.world.data.*;
 import net.minecraft.ChatFormatting;
@@ -55,6 +57,19 @@ public class AdminCommand {
                 .then(register("restoreClearedVillagers", AdminCommand::restoreClearedVillagers))
                 .then(register("forceBuildingType").then(Commands.argument("type", StringArgumentType.string()).executes(AdminCommand::forceBuildingType)).executes(AdminCommand::clearForcedBuildingType))
                 .then(register("forceFullHearts", AdminCommand::forceFullHearts))
+                .then(register("forceRank")
+                        .then(Commands.argument("target", EntityArgument.player())
+                                .then(Commands.argument("rank", StringArgumentType.word())
+                                        .suggests((ctx, builder) -> SharedSuggestionProvider.suggest(
+                                                Arrays.stream(Rank.values()).map(r -> r.name().toLowerCase(Locale.ROOT)), builder))
+                                        .executes(ctx -> forceVillageRank(ctx, false))
+                                        .then(Commands.argument("villageId", IntegerArgumentType.integer(0))
+                                                .executes(ctx -> forceVillageRank(ctx, true))))))
+                .then(register("clearForcedRank")
+                        .then(Commands.argument("target", EntityArgument.player())
+                                .executes(ctx -> clearVillageRank(ctx, false))
+                                .then(Commands.argument("villageId", IntegerArgumentType.integer(0))
+                                        .executes(ctx -> clearVillageRank(ctx, true)))))
                 .then(register("forceBabyGrowth", AdminCommand::forceBabyGrowth))
                 .then(register("forceChildGrowth", AdminCommand::forceChildGrowth))
                 .then(register("incrementHearts", AdminCommand::incrementHearts))
@@ -90,6 +105,37 @@ public class AdminCommand {
                     new ClickEvent.SuggestCommand("/tp @s " + pos.getX() + " ~ " + pos.getZ()));
         }
         return 0;
+    }
+
+    private static Optional<Village> rankVillage(CommandContext<CommandSourceStack> ctx, boolean explicit)
+            throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        if (explicit) return VillageManager.get(ctx.getSource().getLevel())
+                .getOrEmpty(IntegerArgumentType.getInteger(ctx, "villageId"));
+        return Village.findNearest(ctx.getSource().getEntity() != null
+                ? ctx.getSource().getEntity() : EntityArgument.getPlayer(ctx, "target"));
+    }
+
+    private static int forceVillageRank(CommandContext<CommandSourceStack> ctx, boolean explicit)
+            throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        ServerPlayer target = EntityArgument.getPlayer(ctx, "target");
+        Rank rank;
+        try { rank = Rank.valueOf(StringArgumentType.getString(ctx, "rank").toUpperCase(Locale.ROOT)); }
+        catch (IllegalArgumentException error) { fail("Unknown rank. Use outlaw, peasant, merchant, noble, mayor or monarch.", ctx); return 0; }
+        Optional<Village> village = rankVillage(ctx, explicit);
+        if (village.isEmpty()) { fail("No village found. Specify a village ID from /mca-admin listVillages.", ctx); return 0; }
+        village.get().getPolitics().forceRank(target, rank);
+        success("Forced " + target.getName().getString() + " to " + rank.name().toLowerCase(Locale.ROOT)
+                + " in " + village.get().getName(), ctx);
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int clearVillageRank(CommandContext<CommandSourceStack> ctx, boolean explicit)
+            throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        Optional<Village> village = rankVillage(ctx, explicit);
+        if (village.isEmpty()) { fail("No village found.", ctx); return 0; }
+        village.get().getPolitics().clearForcedRank(EntityArgument.getPlayer(ctx, "target").getUUID());
+        success("Restored normal rank requirements for this player in " + village.get().getName(), ctx);
+        return Command.SINGLE_SUCCESS;
     }
 
     private static int assumeNameDead(CommandContext<CommandSourceStack> ctx) {
@@ -366,6 +412,8 @@ public class AdminCommand {
         }
 
         sendMessage(player, DARK_RED + "--- " + GOLD + "OP COMMANDS" + DARK_RED + " ---");
+        sendMessage(player, WHITE + " /mca-admin forceRank <player> <rank> [villageId] " + GOLD + " - Force a village rank, ignoring requirements.");
+        sendMessage(player, WHITE + " /mca-admin clearForcedRank <player> [villageId] " + GOLD + " - Restore normal rank requirements.");
         sendMessage(player, WHITE + " /mca-admin forceBuildingType id " + GOLD + " - Force a building's type. " + RED + "(Must be a valid building type)");
         sendMessage(player, WHITE + " /mca-admin forceFullHearts " + GOLD + " - Force all hearts on all villagers.");
         sendMessage(player, WHITE + " /mca-admin forceBabyGrowth " + GOLD + " - Force your baby to grow up.");

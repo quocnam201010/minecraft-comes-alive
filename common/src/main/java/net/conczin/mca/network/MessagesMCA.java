@@ -19,6 +19,7 @@ public interface MessagesMCA {
         c.register(GetFamilyTreeRequest.TYPE, GetFamilyTreeRequest.STREAM_CODEC, true);
         c.register(GetInteractDataRequest.TYPE, GetInteractDataRequest.STREAM_CODEC, true);
         c.register(GetVillageRequest.TYPE, GetVillageRequest.STREAM_CODEC, true);
+        c.register(GovernVillageMessage.TYPE, GovernVillageMessage.STREAM_CODEC, true);
         c.register(GetVillagerRequest.TYPE, GetVillagerRequest.STREAM_CODEC, true);
         c.register(InteractionCloseRequest.TYPE, InteractionCloseRequest.STREAM_CODEC, true);
         c.register(InteractionDialogueInitMessage.TYPE, InteractionDialogueInitMessage.STREAM_CODEC, true);

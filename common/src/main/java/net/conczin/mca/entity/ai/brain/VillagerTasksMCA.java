@@ -7,6 +7,7 @@ import com.mojang.datafixers.util.Pair;
 import net.conczin.mca.Config;
 import net.conczin.mca.entity.EquipmentSet;
 import net.conczin.mca.entity.VillagerEntityMCA;
+import net.conczin.mca.server.world.data.villageComponents.VillagePolitics;
 import net.conczin.mca.entity.ai.ActivitiesMCA;
 import net.conczin.mca.entity.ai.BedPoiCompatibility;
 import net.conczin.mca.entity.ai.MemoryModuleTypeMCA;
@@ -90,6 +91,7 @@ public class VillagerTasksMCA {
             MemoryModuleType.ATTACK_TARGET,
             MemoryModuleType.ATTACK_COOLING_DOWN,
             MemoryModuleTypeMCA.PLAYER_FOLLOWING,
+            MemoryModuleTypeMCA.ARMY_ATTACK_TARGET,
             MemoryModuleTypeMCA.STAYING,
             MemoryModuleTypeMCA.NEAREST_GUARD_ENEMY,
             MemoryModuleTypeMCA.WEARS_ARMOR,
@@ -400,6 +402,11 @@ public class VillagerTasksMCA {
 
             Optional<LivingEntity> primary = villager.getBrain().getMemoryInternal(MemoryModuleTypeMCA.NEAREST_GUARD_ENEMY);
             if (primary.isPresent() && shouldRespondToGuardEnemy(villager, primary.get())) {
+                if (VillagePolitics.isEnemy(villager, primary.get())) {
+                    villager.getBrain().setMemory(MemoryModuleTypeMCA.ARMY_ATTACK_TARGET, primary.get());
+                } else {
+                    villager.getBrain().eraseMemory(MemoryModuleTypeMCA.ARMY_ATTACK_TARGET);
+                }
                 return primary;
             } else {
                 return Optional.empty();
@@ -408,6 +415,10 @@ public class VillagerTasksMCA {
     }
 
     private static boolean shouldKeepAttackTarget(VillagerEntityMCA villager, LivingEntity target) {
+        if (villager.getBrain().isMemoryValue(MemoryModuleTypeMCA.ARMY_ATTACK_TARGET, target)
+                && !VillagePolitics.isEnemy(villager, target)) {
+            return false;
+        }
         return target.isAlive()
                && !target.isRemoved()
                && target.level() == villager.level()
@@ -432,6 +443,7 @@ public class VillagerTasksMCA {
     }
 
     private static void onGuardTargetErased(ServerLevel level, VillagerEntityMCA villager, LivingEntity target) {
+        villager.getBrain().eraseMemory(MemoryModuleTypeMCA.ARMY_ATTACK_TARGET);
         if (target instanceof Player && !target.isAlive()) {
             villager.pardonPlayers(Integer.MAX_VALUE);
         }

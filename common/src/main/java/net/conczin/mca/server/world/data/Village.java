@@ -71,6 +71,7 @@ public class Village implements Iterable<Building> {
     private final VillageMarriageManager villageMarriageManager = new VillageMarriageManager(this);
     private final VillageProcreationManager villageProcreationManager = new VillageProcreationManager(this);
     private final VillageTaxesManager villageTaxesManager = new VillageTaxesManager(this);
+    private final VillagePolitics politics = new VillagePolitics(this);
 
     public long lastMoveIn;
     private String name = API.getVillagePool().pickVillageName("village");
@@ -110,6 +111,7 @@ public class Village implements Iterable<Building> {
         nextMourningTime = tag.getLong("nextMourningTime").orElse(0L);
         this.world = world;
 
+        politics.load(tag.getCompound("politics").orElseGet(CompoundTag::new));
         RoomDFU.Result data = RoomDFU.load(tag);
         buildings.putAll(data.buildings());
         externalBuildings.putAll(data.externalBuildings());
@@ -721,6 +723,10 @@ public class Village implements Iterable<Building> {
         return reputation.getOrDefault(player.getUUID(), Collections.emptyMap()).values().stream().mapToInt(Integer::intValue).sum();
     }
 
+    public boolean hasReputation(UUID player) { return reputation.containsKey(player); }
+
+    public VillagePolitics getPolitics() { return politics; }
+
     public void pushHearts(Player player, int hearts) {
         List<Memories> memories = new ArrayList<>();
         for (UUID uuid : residentNames.keySet()) {
@@ -763,10 +769,12 @@ public class Village implements Iterable<Building> {
         tag.put("logicalBuildings", NbtHelper.fromList(logicalBuildings.values(), LogicalBuilding::save));
         tag.putBoolean("autoScan", autoScan);
         tag.putLong("nextMourningTime", nextMourningTime);
+        tag.put("politics", politics.save());
         return tag;
     }
 
     public void merge(Village village) {
+        politics.merge(village.politics);
         buildings.putAll(village.buildings);
         externalBuildings.putAll(village.externalBuildings);
         structures.putAll(village.structures);

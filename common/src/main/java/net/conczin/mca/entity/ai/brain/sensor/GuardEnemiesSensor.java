@@ -4,6 +4,7 @@ import com.google.common.collect.ImmutableSet;
 import net.conczin.mca.Config;
 import net.conczin.mca.entity.VillagerEntityMCA;
 import net.conczin.mca.entity.ai.MemoryModuleTypeMCA;
+import net.conczin.mca.server.world.data.villageComponents.VillagePolitics;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.Identifier;
@@ -170,6 +171,9 @@ public class GuardEnemiesSensor extends Sensor<LivingEntity> {
             Optional<Player> followedPlayer,
             Optional<Integer> configuredPriority
     ) {
+        if (guard instanceof VillagerEntityMCA soldier && VillagePolitics.isEnemy(soldier, entity)) {
+            return entity instanceof Player player && (player.isCreative() || player.isSpectator()) ? -1 : 11;
+        }
         if (entity instanceof VillagerEntityMCA villager) {
             return villager.isHostile() ? 10 : -1;
         }

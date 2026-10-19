@@ -2,6 +2,7 @@ package net.conczin.mca.client.gui;
 
 import net.conczin.mca.MCA;
 import net.conczin.mca.entity.VillagerLike;
+import net.conczin.mca.entity.VillagerEntityMCA;
 import net.conczin.mca.entity.ai.Genetics;
 import net.conczin.mca.entity.ai.Memories;
 import net.conczin.mca.entity.ai.Traits;
@@ -227,6 +228,12 @@ public class InteractScreen extends AbstractDynamicScreen {
                 });
                 drawTooltip(context, traitText, 10, 30 + h * 4);
             }
+        }
+
+        //hearts
+        if (villager instanceof VillagerEntityMCA npc) {
+            drawTooltip(context, Component.translatable("gui.interact.physical_health", npc.getPhysicalHealth().get()),
+                    10, 30 + h * 5);
         }
 
         //hearts

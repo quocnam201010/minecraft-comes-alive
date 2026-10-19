@@ -37,7 +37,8 @@ public record GetVillageRequest() implements HandleablePayload {
             boolean isVillage = village.get().isVillage();
             Rank rank = Tasks.getRank(village.get(), player);
             Set<String> ids = Tasks.getCompletedIds(village.get(), player);
-            Network.sendToPlayer(new GetVillageResponse(village.get(), rank, reputation, isVillage, ids), player);
+            village.get().getPolitics().rememberPlayer(player);
+            Network.sendToPlayer(new GetVillageResponse(village.get(), rank, reputation, isVillage, ids, player), player);
         } else {
             Network.sendToPlayer(new GetVillageFailedResponse(), player);
         }

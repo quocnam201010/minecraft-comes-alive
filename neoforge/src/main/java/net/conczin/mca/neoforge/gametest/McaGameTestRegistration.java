@@ -52,6 +52,7 @@ import net.conczin.mca.server.world.data.TaigaFloorPerformanceGameTests;
 import net.conczin.mca.server.world.data.ReportedFloorInteractionGameTests;
 import net.conczin.mca.server.world.data.ReportedStairHouseGameTests;
 import net.conczin.mca.server.world.data.VillageMourningGameTests;
+import net.conczin.mca.server.world.data.VillageGovernanceGameTests;
 import net.minecraft.core.Holder;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.gametest.framework.FunctionGameTestInstance;
@@ -137,7 +138,8 @@ public final class McaGameTestRegistration {
             TaigaFloorPerformanceGameTests.class,
             ReportedFloorInteractionGameTests.class,
             ReportedStairHouseGameTests.class,
-            VillageMourningGameTests.class
+            VillageMourningGameTests.class,
+            VillageGovernanceGameTests.class
     );
 
     private McaGameTestRegistration() {

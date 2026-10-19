@@ -3,6 +3,7 @@ package net.conczin.mca.entity;
 import net.conczin.mca.Config;
 import net.conczin.mca.entity.ai.Genetics;
 import net.conczin.mca.entity.ai.LongTermMemory;
+import net.conczin.mca.entity.ai.PhysicalHealth;
 import net.conczin.mca.entity.ai.Relationship;
 import net.conczin.mca.entity.ai.Traits;
 import net.conczin.mca.entity.ai.brain.VillagerBrain;
@@ -60,6 +61,7 @@ public class ZombieVillagerEntityMCA extends ZombieVillager implements VillagerL
     private CompoundTag nicknameData = new CompoundTag();
     private CompoundTag longTermMemoryData = new CompoundTag();
     private int burned;
+    private int physicalHealthLoadedTicks;
 
     public ZombieVillagerEntityMCA(EntityType<? extends ZombieVillager> type, Level world, Gender gender) {
         super(type, world);
@@ -299,6 +301,7 @@ public class ZombieVillagerEntityMCA extends ZombieVillager implements VillagerL
     @Override
     public void readAdditionalSaveData(ValueInput input) {
         CompoundTag nbt = VillagerEntityMCA.readMcaSaveData(input);
+        physicalHealthLoadedTicks = Math.clamp(nbt.getInt(PhysicalHealth.TIMER_KEY).orElse(0), 0, PhysicalHealth.CYCLE_TICKS - 1);
         super.readAdditionalSaveData(input);
         getTypeDataManager().load(this, nbt);
         relations.readFromNbt(nbt);
@@ -316,6 +319,7 @@ public class ZombieVillagerEntityMCA extends ZombieVillager implements VillagerL
 
     @Override
     public void writeAdditionalConversionData(CompoundTag output) {
+        output.putInt(PhysicalHealth.TIMER_KEY, physicalHealthLoadedTicks);
         output.putString(VillagerEntityMCA.CHAT_AI_PROMPT_KEY, chatAIPrompt);
         output.put(VillagerEntityMCA.NICKNAMES_KEY, nicknameData.copy());
         output.put(LongTermMemory.NBT_KEY, longTermMemoryData.copy());
@@ -323,6 +327,7 @@ public class ZombieVillagerEntityMCA extends ZombieVillager implements VillagerL
 
     @Override
     public void readAdditionalConversionData(CompoundTag input) {
+        physicalHealthLoadedTicks = Math.clamp(input.getInt(PhysicalHealth.TIMER_KEY).orElse(0), 0, PhysicalHealth.CYCLE_TICKS - 1);
         chatAIPrompt = input.getString(VillagerEntityMCA.CHAT_AI_PROMPT_KEY).orElse("");
         nicknameData = input.getCompound(VillagerEntityMCA.NICKNAMES_KEY).orElseGet(CompoundTag::new).copy();
         longTermMemoryData = input.getCompound(LongTermMemory.NBT_KEY).orElseGet(CompoundTag::new).copy();
@@ -341,6 +346,7 @@ public class ZombieVillagerEntityMCA extends ZombieVillager implements VillagerL
         relations.writeToNbt(nbt);
         InventoryUtils.saveToNBT(this.registryAccess(), inventory, nbt);
         nbt.putString(VillagerEntityMCA.CHAT_AI_PROMPT_KEY, chatAIPrompt);
+        nbt.putInt(PhysicalHealth.TIMER_KEY, physicalHealthLoadedTicks);
         nbt.put(VillagerEntityMCA.NICKNAMES_KEY, nicknameData.copy());
         nbt.put(LongTermMemory.NBT_KEY, longTermMemoryData.copy());
         VillagerEntityMCA.storeMcaSaveData(output, nbt);

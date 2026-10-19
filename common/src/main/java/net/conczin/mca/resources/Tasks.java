@@ -43,6 +43,14 @@ public class Tasks extends SimpleJsonResourceReloadListener<JsonElement> {
     }
 
     public static Rank getRank(Village village, ServerPlayer player) {
+        if (player != null && village.getPolitics().isPlayerOutlaw(player)) return Rank.OUTLAW;
+        return getRankIgnoringPolitics(village, player);
+    }
+
+    public static Rank getRankIgnoringPolitics(Village village, ServerPlayer player) {
+        if (player != null && village.getPolitics().getForcedRank(player.getUUID()).isPresent()) {
+            return village.getPolitics().getForcedRank(player.getUUID()).orElseThrow();
+        }
         if (player != null && PlayerSaveData.get(player).isOverrideVillageRequirements()) {
             return Rank.MONARCH;
         }

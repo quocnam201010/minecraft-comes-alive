@@ -6,6 +6,7 @@ import net.conczin.mca.client.gui.widget.TooltipButtonWidget;
 import net.conczin.mca.client.gui.widget.WidgetUtils;
 import net.conczin.mca.network.Network;
 import net.conczin.mca.network.c2s.GetVillageRequest;
+import net.conczin.mca.network.c2s.GovernVillageMessage;
 import net.conczin.mca.network.c2s.RenameVillageMessage;
 import net.conczin.mca.network.c2s.ReportBuildingMessage;
 import net.conczin.mca.network.c2s.SaveVillageMessage;
@@ -19,6 +20,8 @@ import net.conczin.mca.server.world.data.RoomTypeResolver;
 import net.conczin.mca.server.world.data.Structure;
 import net.conczin.mca.server.world.data.StructureFloor;
 import net.conczin.mca.server.world.data.Village;
+import net.conczin.mca.server.world.data.villageComponents.VillagePolitics;
+import net.minecraft.nbt.CompoundTag;
 import net.conczin.mca.util.compat.ButtonWidget;
 import net.conczin.mca.util.localization.FlowingText;
 import net.minecraft.ChatFormatting;
@@ -100,6 +103,20 @@ public class BlueprintScreen extends ExtendedScreen {
     private ButtonWidget[] buttonBirths;
     private ButtonWidget[] buttonMarriage;
     private ButtonWidget buttonPage;
+    private List<Map.Entry<Integer, String>> governanceVillages = List.of();
+    private List<Map.Entry<UUID, String>> governancePlayers = List.of();
+    private int foreignVillageIndex;
+    private int playerChoiceIndex;
+    private int banListPage;
+    private int warListPage;
+    private Rank warMinimumRank = Rank.PEASANT;
+    private boolean warPlayers = true;
+    private boolean warVillagers = true;
+    private String playerBanDraft = "";
+    private VillagePolitics.FoodAccess foodAccessDraft;
+    private Set<String> foodProfessionsDraft;
+    private int foodBudgetDraft = -1;
+    private int foodProfessionPage;
     private int pageNumber = 0;
     private ButtonWidget floorPreviousButton;
     private ButtonWidget floorLabelButton;
@@ -241,10 +258,11 @@ public class BlueprintScreen extends ExtendedScreen {
         int bx = width / 2 - MAP_NAVIGATION_OFFSET;
         int by = height / 2 - 56;
         if (!page.equals("rename") && (!page.equals("empty") && !page.equals("waiting"))) {
-            for (String p : new String[]{"map", "rank", "catalog", "villagers", "rules"}) {
+            for (String p : new String[]{"map", "rank", "catalog", "villagers", "rules", "army", "food"}) {
                 ButtonWidget widget = new ButtonWidget(bx, by, NAVIGATION_WIDTH, 20, Component.translatable("gui.blueprint." + p), b -> setPage(p));
                 addRenderableWidget(widget);
-                if (page.equals(p) || ("advanced".equals(page) && "map".equals(p))) {
+                if (page.equals(p) || ("advanced".equals(page) && "map".equals(p))
+                        || ("army_villages".equals(page) && "army".equals(p))) {
                     widget.active = false;
                 }
                 by += 22;
@@ -252,6 +270,12 @@ public class BlueprintScreen extends ExtendedScreen {
         }
 
         switch (page) {
+            case "army", "army_villages":
+                createArmyControls();
+                break;
+            case "food":
+                createFoodControls();
+                break;
             case "empty":
                 bx = width / 2 - 48;
                 by = layoutY;
@@ -509,8 +533,159 @@ public class BlueprintScreen extends ExtendedScreen {
             case "catalog" -> renderCatalog(context);
             case "villagers" -> renderVillagers(context);
             case "rules" -> renderRules(context);
+            case "army", "army_villages", "food" -> renderGovernance(context);
         }
 
+    }
+
+    private boolean canGovern() { return rank == Rank.MONARCH && village != null; }
+
+    private void govern(GovernVillageMessage.Action action, String target, int value, int flags, List<String> professions) {
+        if (canGovern()) Network.sendToServer(new GovernVillageMessage(village.getId(), action, target, value, flags, professions));
+    }
+
+    private ButtonWidget governanceButton(int x, int y, int width, Component text, Runnable action) {
+        return addRenderableWidget(new ButtonWidget(x, y, width, 20, text, button -> action.run()));
+    }
+
+    private void createArmyControls() {
+        if (!canGovern()) return;
+        int x = width / 2 - 78;
+        int y = height / 2 - 82;
+        governanceButton(x, y, 106, Component.translatable("gui.blueprint.army.players"), () -> setPage("army"));
+        governanceButton(x + 110, y, 106, Component.translatable("gui.blueprint.army.villages"), () -> setPage("army_villages"));
+        if (page.equals("army")) {
+            EditBox field = addRenderableWidget(new EditBox(font, x, y + 27, 142, 20,
+                    Component.translatable("gui.blueprint.army.player")));
+            field.setMaxLength(128);
+            field.setHint(Component.translatable("gui.blueprint.army.player"));
+            field.setValue(playerBanDraft);
+            field.setResponder(value -> playerBanDraft = value);
+            governanceButton(x + 146, y + 27, 70, Component.translatable("gui.blueprint.army.ban"),
+                    () -> govern(GovernVillageMessage.Action.BAN_PLAYER, field.getValue().trim(), 0, 0, List.of()));
+            governanceButton(x, y + 50, 216, Component.translatable("gui.blueprint.army.choose_player"), () -> {
+                if (!governancePlayers.isEmpty()) {
+                    var selected = governancePlayers.get(Math.floorMod(playerChoiceIndex++, governancePlayers.size()));
+                    playerBanDraft = selected.getValue();
+                    setPage(page);
+                }
+            });
+            List<Map.Entry<UUID, String>> banned = village.getPolitics().getBannedPlayers().entrySet().stream()
+                    .sorted(Map.Entry.comparingByValue()).toList();
+            banListPage = Math.clamp(banListPage, 0, Math.max(0, (banned.size() - 1) / 4));
+            for (int row = 0; row < 4; row++) {
+                int index = banListPage * 4 + row;
+                if (index >= banned.size()) break;
+                var entry = banned.get(index);
+                governanceButton(x, y + 78 + row * 21, 216,
+                        Component.translatable("gui.blueprint.army.pardon", entry.getValue()),
+                        () -> govern(GovernVillageMessage.Action.PARDON_PLAYER, entry.getKey().toString(), 0, 0, List.of()));
+            }
+            governanceButton(x, y + 166, 106, Component.literal("<"), () -> { banListPage--; setPage(page); });
+            governanceButton(x + 110, y + 166, 106, Component.literal(">"), () -> { banListPage++; setPage(page); });
+        } else {
+            if (!governanceVillages.isEmpty()) {
+                foreignVillageIndex = Math.floorMod(foreignVillageIndex, governanceVillages.size());
+                var foreign = governanceVillages.get(foreignVillageIndex);
+                governanceButton(x, y + 27, 216, Component.literal(foreign.getValue() + " (#" + foreign.getKey() + ")"),
+                        () -> { foreignVillageIndex++; setPage(page); });
+            } else {
+                governanceButton(x, y + 27, 216, Component.translatable("gui.blueprint.army.no_villages"), () -> { }).active = false;
+            }
+            ButtonWidget minimum = governanceButton(x, y + 50, 216,
+                    Component.translatable("gui.blueprint.army.minimum_rank", Component.translatable(warMinimumRank.getTranslationKey())),
+                    () -> { warMinimumRank = Rank.values()[(warMinimumRank.ordinal() + 1) % Rank.values().length]; setPage(page); });
+            minimum.setTooltip(Tooltip.create(Component.translatable("gui.blueprint.army.minimum_rank.tooltip")));
+            governanceButton(x, y + 73, 106, toggleLabel("gui.blueprint.army.players", warPlayers),
+                    () -> { warPlayers = !warPlayers; setPage(page); });
+            governanceButton(x + 110, y + 73, 106, toggleLabel("gui.blueprint.army.npcs", warVillagers),
+                    () -> { warVillagers = !warVillagers; setPage(page); });
+            governanceButton(x, y + 96, 216, Component.translatable("gui.blueprint.army.declare"), () -> {
+                if (!governanceVillages.isEmpty()) govern(GovernVillageMessage.Action.SET_HOSTILITY,
+                        Integer.toString(governanceVillages.get(foreignVillageIndex).getKey()), warMinimumRank.ordinal(),
+                        (warPlayers ? 1 : 0) | (warVillagers ? 2 : 0), List.of());
+            }).active = !governanceVillages.isEmpty() && (warPlayers || warVillagers);
+            List<VillagePolitics.HostilityRule> rules = List.copyOf(village.getPolitics().getHostilities());
+            warListPage = Math.clamp(warListPage, 0, Math.max(0, (rules.size() - 1) / 2));
+            for (int row = 0; row < 2; row++) {
+                int index = warListPage * 2 + row;
+                if (index >= rules.size()) break;
+                var rule = rules.get(index);
+                String name = governanceVillages.stream().filter(entry -> entry.getKey() == rule.villageId())
+                        .map(Map.Entry::getValue).findFirst().orElse("#" + rule.villageId());
+                ButtonWidget peace = governanceButton(x, y + 122 + row * 21, 216,
+                        Component.translatable("gui.blueprint.army.peace", name),
+                        () -> govern(GovernVillageMessage.Action.REMOVE_HOSTILITY, Integer.toString(rule.villageId()), 0, 0, List.of()));
+                peace.setTooltip(Tooltip.create(Component.translatable("gui.blueprint.army.rule",
+                        Component.translatable(rule.minimumRank().getTranslationKey()), rule.targetPlayers(), rule.targetVillagers())));
+            }
+            governanceButton(x, y + 166, 106, Component.literal("<"), () -> { warListPage--; setPage(page); });
+            governanceButton(x + 110, y + 166, 106, Component.literal(">"), () -> { warListPage++; setPage(page); });
+        }
+    }
+
+    private void createFoodControls() {
+        if (!canGovern()) return;
+        if (foodAccessDraft == null) foodAccessDraft = village.getPolitics().getFoodAccess();
+        if (foodProfessionsDraft == null) foodProfessionsDraft = new TreeSet<>(village.getPolitics().getFoodProfessions());
+        if (foodBudgetDraft < 0) foodBudgetDraft = village.getPolitics().getFoodBudget();
+        int x = width / 2 - 78;
+        int y = height / 2 - 86;
+        governanceButton(x, y, 216, Component.translatable("gui.blueprint.food.access." + foodAccessDraft.name().toLowerCase(Locale.ROOT)), () -> {
+            foodAccessDraft = VillagePolitics.FoodAccess.values()[(foodAccessDraft.ordinal() + 1) % VillagePolitics.FoodAccess.values().length];
+            setPage(page);
+        });
+        governanceButton(x, y + 24, 32, Component.literal("-"), () -> { foodBudgetDraft = Math.max(0, foodBudgetDraft - 10); setPage(page); });
+        governanceButton(x + 36, y + 24, 144, Component.translatable("gui.blueprint.food.budget", foodBudgetDraft), () -> { })
+                .setTooltip(Tooltip.create(Component.translatable("gui.blueprint.food.budget.tooltip")));
+        governanceButton(x + 184, y + 24, 32, Component.literal("+"), () -> { foodBudgetDraft = Math.min(200, foodBudgetDraft + 10); setPage(page); });
+        List<Identifier> professions = BuiltInRegistries.VILLAGER_PROFESSION.keySet().stream().sorted().toList();
+        foodProfessionPage = Math.clamp(foodProfessionPage, 0, Math.max(0, (professions.size() - 1) / 5));
+        for (int row = 0; row < 5; row++) {
+            int index = foodProfessionPage * 5 + row;
+            if (index >= professions.size()) break;
+            Identifier profession = professions.get(index);
+            var holder = BuiltInRegistries.VILLAGER_PROFESSION.get(profession).orElseThrow();
+            boolean allowed = foodProfessionsDraft.contains(profession.toString());
+            governanceButton(x, y + 54 + row * 21, 216,
+                    Component.literal(allowed ? "[+] " : "[ ] ").append(holder.value().name()), () -> {
+                        if (!foodProfessionsDraft.remove(profession.toString())) foodProfessionsDraft.add(profession.toString());
+                        setPage(page);
+                    }).active = foodAccessDraft == VillagePolitics.FoodAccess.SELECTED;
+        }
+        governanceButton(x, y + 163, 106, Component.literal("<"), () -> { foodProfessionPage--; setPage(page); });
+        governanceButton(x + 110, y + 163, 106, Component.literal(">"), () -> { foodProfessionPage++; setPage(page); });
+        governanceButton(x, y + 186, 216, Component.translatable("gui.blueprint.food.save"),
+                () -> govern(GovernVillageMessage.Action.FOOD_POLICY, foodAccessDraft.name(), foodBudgetDraft, 0, List.copyOf(foodProfessionsDraft)));
+    }
+
+    private void renderGovernance(GuiGraphicsExtractor context) {
+        if (!canGovern()) {
+            context.centeredText(font, Component.translatable("gui.blueprint.governance.monarch_only"), width / 2 + 20, height / 2, 0xffffffff);
+        }
+    }
+
+    public void setGovernanceDirectory(CompoundTag data) {
+        CompoundTag villages = data.getCompound("VillageDirectory").orElseGet(CompoundTag::new);
+        List<Map.Entry<Integer, String>> villageEntries = new ArrayList<>();
+        for (String key : villages.keySet()) {
+            try { villageEntries.add(Map.entry(Integer.parseInt(key), villages.getString(key).orElse(key))); }
+            catch (NumberFormatException ignored) { }
+        }
+        villageEntries.sort(Map.Entry.comparingByValue());
+        governanceVillages = List.copyOf(villageEntries);
+        CompoundTag players = data.getCompound("PlayerDirectory").orElseGet(CompoundTag::new);
+        List<Map.Entry<UUID, String>> playerEntries = new ArrayList<>();
+        for (String key : players.keySet()) {
+            try { playerEntries.add(Map.entry(UUID.fromString(key), players.getString(key).orElse(key))); }
+            catch (IllegalArgumentException ignored) { }
+        }
+        playerEntries.sort(Map.Entry.comparingByValue());
+        governancePlayers = List.copyOf(playerEntries);
+        foodAccessDraft = null;
+        foodProfessionsDraft = null;
+        foodBudgetDraft = -1;
+        if ("army".equals(page) || "army_villages".equals(page) || "food".equals(page)) setPage(page);
     }
 
     private static ReportBuildingMessage.Action getStructureScanAction(Village.RoomScanMode mode) {

@@ -137,6 +137,7 @@ public class ClientHandlerImpl implements ClientHandler {
             Village village = new Village(message.getData(), null);
             gui.setVillage(village);
             gui.setVillageData(message.rank(), message.reputation(), message.isVillage(), message.ids(), message.tasks());
+            gui.setGovernanceDirectory(message.getData());
         }
     }
 

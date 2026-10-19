@@ -225,6 +225,7 @@ public class PlayerSaveData extends SavedData implements EntityRelationship {
     }
 
     protected void onEnter(ServerPlayer self, Village village) {
+        village.getPolitics().rememberPlayer(self);
         if (Config.getInstance().enterVillageNotification && village.isVillage()) {
             self.sendSystemMessage(Component.translatable("gui.village.welcome", village.getName()).withStyle(ChatFormatting.GOLD), true);
         }

@@ -22,6 +22,7 @@ public interface MemoryModuleTypeMCA {
     MemoryModuleType<Player> PLAYER_FOLLOWING = register("player_following_memory", Optional.empty());
     MemoryModuleType<Boolean> STAYING = register("staying_memory", Optional.of(Codec.BOOL));
     MemoryModuleType<LivingEntity> NEAREST_GUARD_ENEMY = register("nearest_guard_enemy", Optional.empty());
+    MemoryModuleType<LivingEntity> ARMY_ATTACK_TARGET = register("army_attack_target", Optional.empty());
     MemoryModuleType<Boolean> WEARS_ARMOR = register("wears_armor", Optional.of(Codec.BOOL));
     MemoryModuleType<Integer> SMALL_BOUNTY = register("small_bounty", Optional.of(Codec.INT));
     MemoryModuleType<LivingEntity> HIT_BY_PLAYER = register("hit_by_player", Optional.empty());

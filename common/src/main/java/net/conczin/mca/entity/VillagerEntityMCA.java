@@ -140,6 +140,7 @@ public class VillagerEntityMCA extends Villager implements VillagerLike<Villager
     private final Genetics genetics = new Genetics(this);
     private final Traits traits = new Traits(this);
     private final Residency residency = new Residency(this);
+    private final PhysicalHealth physicalHealth = new PhysicalHealth(this);
     private final BreedableRelationship relations = new BreedableRelationship(this);
     private final VillagerCommandHandler interactions = new VillagerCommandHandler(this);
     private final UpdatableInventory inventory = new UpdatableInventory(27);
@@ -222,7 +223,7 @@ public class VillagerEntityMCA extends Villager implements VillagerLike<Villager
     }
 
     public static <E extends Entity> CDataManager.Builder<E> createTrackedData(CDataManager.Builder<E> builder) {
-        return VillagerLike.createTrackedData(builder).addAll(INFECTION_PROGRESS)
+        return VillagerLike.createTrackedData(builder).addAll(INFECTION_PROGRESS, PhysicalHealth.VALUE)
                 .add(Residency::createTrackedData)
                 .add(BreedableRelationship::createTrackedData);
     }
@@ -230,6 +231,10 @@ public class VillagerEntityMCA extends Villager implements VillagerLike<Villager
     private static boolean canEat(ItemStack i) {
         return canEat(i, i.get(DataComponents.FOOD));
     }
+
+    public static boolean isSafeFood(ItemStack stack) { return canEat(stack); }
+
+    public PhysicalHealth getPhysicalHealth() { return physicalHealth; }
 
     private static boolean canEat(ItemStack i, @Nullable FoodProperties foodProperties) {
         return foodProperties != null
@@ -792,7 +797,7 @@ public class VillagerEntityMCA extends Villager implements VillagerLike<Villager
         Entity attacker = source.getEntity();
 
         // Notify the surrounding guards when a villager is attacked. Yoinks!
-        if (!level().isClientSide() && attacker instanceof LivingEntity livingEntity && !isHostile() && !isFriend(attacker.getType())) {
+        if (!level().isClientSide() && attacker instanceof LivingEntity livingEntity && !isHostile() && !isFriendlyAttacker(attacker)) {
             int victimBountyBeforeHit = getSmallBounty();
 
             // remember the specific attacker
@@ -801,6 +806,11 @@ public class VillagerEntityMCA extends Villager implements VillagerLike<Villager
 
             Vec3 pos = position();
             level().getEntitiesOfClass(VillagerEntityMCA.class, new AABB(pos, pos).inflate(32)).forEach(v -> {
+                if (attacker instanceof VillagerEntityMCA && getResidency().getHomeVillage().isPresent()
+                        && v.getResidency().getHomeVillage().isPresent()
+                        && getResidency().getHomeVillage().get().getId() != v.getResidency().getHomeVillage().get().getId()) {
+                    return;
+                }
                 if (this.distanceToSqr(v) <= (v.getTarget() == null ? 1024 : 64)) {
                     if (attacker instanceof Player player) {
                         int bounty = v == this ? victimBountyBeforeHit : v.getSmallBounty();
@@ -843,7 +853,9 @@ public class VillagerEntityMCA extends Villager implements VillagerLike<Villager
     }
 
     public boolean isGuard() {
-        return getProfession() == ProfessionsMCA.GUARD || getProfession() == ProfessionsMCA.ARCHER;
+        return getProfession() == ProfessionsMCA.GUARD || getProfession() == ProfessionsMCA.ARCHER
+                || getProfession() == ProfessionsMCA.MERCENARY
+                || getVillagerData().profession().is(ProfessionsMCA.MILITARY);
     }
 
     public int getSmallBounty() {
@@ -1039,6 +1051,7 @@ public class VillagerEntityMCA extends Villager implements VillagerLike<Villager
     @Override
     public void tick() {
         super.tick();
+        physicalHealth.tick();
         mcaBrain.tickPanicAnimation();
 
         int visualAge = getVisualAge();
@@ -1807,6 +1820,7 @@ public class VillagerEntityMCA extends Villager implements VillagerLike<Villager
     @Override
     public void readAdditionalSaveData(ValueInput input) {
         Optional<Integer> savedVanillaAge = input.getInt("Age");
+        float savedHealth = input.getFloatOr("Health", getHealth());
         CompoundTag nbt = McaDataFixers.update(readMcaSaveData(input));
         super.readAdditionalSaveData(input);
 
@@ -1839,6 +1853,12 @@ public class VillagerEntityMCA extends Villager implements VillagerLike<Villager
         updateAttributes();
 
         inventory.clearContent();
+        physicalHealth.load(nbt);
+        lastAppliedHealthBonus = Double.NaN;
+        updateLevelHealthBonus();
+        // Vanilla reads Health before MCA's transient maximum-HP bonuses are restored.
+        // Reapply the saved value after restoring those bonuses so a reload cannot remove earned HP.
+        if (Float.isFinite(savedHealth)) setHealth(savedHealth);
         InventoryUtils.readFromNBT(this.registryAccess(), inventory, nbt);
 
         if (nbt.contains("DespawnDelay")) {
@@ -1896,6 +1916,7 @@ public class VillagerEntityMCA extends Villager implements VillagerLike<Villager
         nbt.putString(CHAT_AI_PROMPT_KEY, getChatAIPrompt());
 
         nbt.putInt("DespawnDelay", this.despawnDelay);
+        physicalHealth.save(nbt);
         nbt.putBoolean("InteractedWith", this.interactedWith);
 
         if (interactedWith) {
@@ -1941,6 +1962,7 @@ public class VillagerEntityMCA extends Villager implements VillagerLike<Villager
 
     @Override
     public void writeAdditionalConversionData(CompoundTag output) {
+        physicalHealth.save(output);
         output.putString(CHAT_AI_PROMPT_KEY, chatAIPrompt);
         writeNicknames(output);
         longTermMemory.writeToNbt(output);
@@ -1948,6 +1970,7 @@ public class VillagerEntityMCA extends Villager implements VillagerLike<Villager
 
     @Override
     public void readAdditionalConversionData(CompoundTag input) {
+        physicalHealth.load(input);
         chatAIPrompt = input.getString(CHAT_AI_PROMPT_KEY).orElse("");
         readNicknames(input);
         longTermMemory.readFromNbt(input);
@@ -1961,6 +1984,15 @@ public class VillagerEntityMCA extends Villager implements VillagerLike<Villager
     //friends will not get slapped in revenge
     public boolean isFriend(EntityType<?> type) {
         return type == EntityTypes.IRON_GOLEM || type == EntitiesMCA.FEMALE_VILLAGER || type == EntitiesMCA.MALE_VILLAGER;
+    }
+
+    private boolean isFriendlyAttacker(Entity attacker) {
+        if (attacker instanceof VillagerEntityMCA npc) {
+            boolean atWar = getResidency().getHomeVillage().map(home -> home.getPolitics().isHostile(npc)).orElse(false)
+                    || npc.getResidency().getHomeVillage().map(home -> home.getPolitics().isHostile(this)).orElse(false);
+            if (atWar) return false;
+        }
+        return isFriend(attacker.getType());
     }
 
     public boolean canFireProjectileWeapon(ProjectileWeaponItem weapon) {

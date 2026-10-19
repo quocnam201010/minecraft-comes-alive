@@ -10,6 +10,8 @@ import net.conczin.mca.resources.data.BuildingType;
 import net.conczin.mca.resources.data.tasks.Task;
 import net.conczin.mca.resources.data.tasks.TaskRegistry;
 import net.conczin.mca.server.world.data.Village;
+import net.conczin.mca.server.world.data.VillageManager;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.codec.ByteBufCodecs;
@@ -73,6 +75,27 @@ public record GetVillageResponse(
 
     public GetVillageResponse(Village data, Rank rank, int reputation, boolean isVillage, Set<String> ids) {
         this(data.save(), rank, reputation, isVillage, ids, Tasks.getInstance().tasks, BuildingTypes.getInstance().getServerBuildingTypes());
+    }
+
+    public GetVillageResponse(Village village, Rank rank, int reputation, boolean isVillage, Set<String> ids, ServerPlayer player) {
+        this(withDirectory(village, player), rank, reputation, isVillage, ids, Tasks.getInstance().tasks,
+                BuildingTypes.getInstance().getServerBuildingTypes());
+    }
+
+    private static CompoundTag withDirectory(Village village, ServerPlayer player) {
+        CompoundTag data = village.save();
+        CompoundTag villages = new CompoundTag();
+        for (Village candidate : VillageManager.get(player.level())) {
+            if (candidate.getId() != village.getId()) villages.putString(Integer.toString(candidate.getId()), candidate.getName());
+        }
+        data.put("VillageDirectory", villages);
+        CompoundTag players = new CompoundTag();
+        village.getPolitics().getKnownPlayers().forEach((id, name) -> players.putString(id.toString(), name));
+        village.getPolitics().getBannedPlayers().forEach((id, name) -> players.putString(id.toString(), name));
+        player.level().getServer().getPlayerList().getPlayers().forEach(candidate ->
+                players.putString(candidate.getUUID().toString(), candidate.getName().getString()));
+        data.put("PlayerDirectory", players);
+        return data;
     }
 
     public CompoundTag data() {

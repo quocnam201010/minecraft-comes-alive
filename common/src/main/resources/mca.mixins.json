@@ -44,6 +44,7 @@
     "client.MixinItemInHandLayer",
     "client.MixinLivingEntityRenderer",
     "client.MixinLivingEntityRenderState",
+    "client.MixinMinecraft",
     "client.MixinModel",
     "client.MixinPlayerRenderer",
     "client.MixinSoundBufferLibrary"

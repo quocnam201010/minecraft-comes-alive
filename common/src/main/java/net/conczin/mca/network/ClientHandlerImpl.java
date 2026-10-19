@@ -142,6 +142,12 @@ public class ClientHandlerImpl implements ClientHandler {
     }
 
     @Override
+    public void handleArmyOverview(ArmyOverviewResponse response) {
+        if (client.gui.screen() instanceof BlueprintScreen gui) gui.setArmyOverview(response.villageId(), response.data());
+        if (client.gui.screen() instanceof net.conczin.mca.client.gui.CommandScreen gui) gui.setOverview(response.villageId(), response.data());
+    }
+
+    @Override
     public void handleVillageDataFailedResponse(GetVillageFailedResponse message) {
         Screen screen = client.gui.screen();
         if (screen instanceof BlueprintScreen gui) {

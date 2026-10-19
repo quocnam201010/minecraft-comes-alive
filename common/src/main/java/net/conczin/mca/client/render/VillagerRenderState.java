@@ -8,4 +8,5 @@ public class VillagerRenderState extends UndeadRenderState {
     public boolean isConverting;
     public float panicAnimationProgress;
     public @Nullable Vec3 fishingHookPosition;
+    public @Nullable String villageName;
 }

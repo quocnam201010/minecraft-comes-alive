@@ -42,7 +42,7 @@
     "height": 20,
     "notifyServer": true,
     "targetServer": false,
-    "constraints": "family",
+    "constraints": "family,!command_soldier",
     "hideOnFail": true
   },
   {
@@ -54,7 +54,19 @@
     "height": 20,
     "notifyServer": true,
     "targetServer": false,
-    "constraints": "mercenary",
+    "constraints": "mercenary,!family,!command_soldier",
+    "hideOnFail": true
+  },
+  {
+    "identifier": "gui.button.inventory",
+    "x": -90,
+    "y": 10,
+    "row": 3,
+    "width": 80,
+    "height": 20,
+    "notifyServer": true,
+    "targetServer": false,
+    "constraints": "command_soldier",
     "hideOnFail": true
   },
   {
@@ -91,5 +103,17 @@
     "notifyServer": false,
     "targetServer": false,
     "constraints": ""
+  },
+  {
+    "identifier": "gui.button.default_equipment",
+    "x": -90,
+    "y": 10,
+    "row": 6,
+    "width": 80,
+    "height": 20,
+    "notifyServer": true,
+    "targetServer": false,
+    "constraints": "command_soldier",
+    "hideOnFail": true
   }
 ]

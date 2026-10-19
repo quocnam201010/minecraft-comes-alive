@@ -13,6 +13,7 @@ public class KeyBindings {
     private static final KeyMapping.Category MCA_CATEGORY = KeyMapping.Category.register(MCA.locate("mca_tab"));
 
     public static final KeyMapping SKIN_LIBRARY = newKey("skin_library", GLFW.GLFW_KEY_U);
+    public static final KeyMapping VILLAGE_NAMES = newKey("village_names", GLFW.GLFW_KEY_V);
 
     private static KeyMapping newKey(String name, int code) {
         KeyMapping key = new KeyMapping(

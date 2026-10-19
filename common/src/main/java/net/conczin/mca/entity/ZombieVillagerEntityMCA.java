@@ -22,6 +22,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.SynchedEntityData;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.ProblemReporter;
 import net.minecraft.world.DifficultyInstance;
 import net.minecraft.world.InteractionHand;
@@ -62,6 +63,8 @@ public class ZombieVillagerEntityMCA extends ZombieVillager implements VillagerL
     private CompoundTag longTermMemoryData = new CompoundTag();
     private int burned;
     private int physicalHealthLoadedTicks;
+    private CompoundTag soldierData = new CompoundTag();
+    private final UpdatableInventory soldierEquipment = new UpdatableInventory(6);
 
     public ZombieVillagerEntityMCA(EntityType<? extends ZombieVillager> type, Level world, Gender gender) {
         super(type, world);
@@ -252,8 +255,27 @@ public class ZombieVillagerEntityMCA extends ZombieVillager implements VillagerL
         }
 
         InventoryUtils.dropAllItems(this, inventory);
+        InventoryUtils.dropAllItems(this, soldierEquipment);
+        soldierData = new CompoundTag();
 
         relations.onDeath(cause);
+    }
+
+    @Override
+    protected void dropCustomDeathLoot(ServerLevel level, DamageSource cause, boolean recentlyHit) {
+        // Owned gear is dropped once from its inventory. Vanilla may also inherit
+        // that equipment during conversion, so exclude it from vanilla's drops.
+        for (int i = 0; i < SoldierEquipment.SLOTS.length; i++)
+            if (!soldierEquipment.getItem(i).isEmpty()) setItemSlot(SoldierEquipment.SLOTS[i], ItemStack.EMPTY);
+        super.dropCustomDeathLoot(level, cause, recentlyHit);
+    }
+
+    private void loadSoldierEquipment() {
+        SoldierEquipment.loadInventory(registryAccess(), soldierEquipment,
+                soldierData.getCompound("SoldierEquipment").orElseGet(CompoundTag::new));
+        for (int i = 0; i < SoldierEquipment.SLOTS.length; i++)
+            if (!getTrackedValue(SoldierEquipment.USE_DEFAULT_EQUIPMENT) || !soldierEquipment.getItem(i).isEmpty())
+                setItemSlot(SoldierEquipment.SLOTS[i], soldierEquipment.getItem(i));
     }
 
     public void setInventory(UpdatableInventory inventory) {
@@ -301,6 +323,7 @@ public class ZombieVillagerEntityMCA extends ZombieVillager implements VillagerL
     @Override
     public void readAdditionalSaveData(ValueInput input) {
         CompoundTag nbt = VillagerEntityMCA.readMcaSaveData(input);
+        soldierData = nbt.getCompound("SoldierData").orElseGet(CompoundTag::new).copy();
         physicalHealthLoadedTicks = Math.clamp(nbt.getInt(PhysicalHealth.TIMER_KEY).orElse(0), 0, PhysicalHealth.CYCLE_TICKS - 1);
         super.readAdditionalSaveData(input);
         getTypeDataManager().load(this, nbt);
@@ -313,12 +336,16 @@ public class ZombieVillagerEntityMCA extends ZombieVillager implements VillagerL
 
         inventory.clearContent();
         InventoryUtils.readFromNBT(this.registryAccess(), inventory, nbt);
+        loadSoldierEquipment();
 
         validateClothes();
     }
 
     @Override
     public void writeAdditionalConversionData(CompoundTag output) {
+        if (soldierData.contains("SoldierEquipment")) soldierData.put("SoldierEquipment", SoldierEquipment.saveInventory(registryAccess(), soldierEquipment));
+        soldierData.getCompound("SoldierOrders").ifPresent(tag -> output.put("SoldierOrders", tag.copy()));
+        soldierData.getCompound("SoldierEquipment").ifPresent(tag -> output.put("SoldierEquipment", tag.copy()));
         output.putInt(PhysicalHealth.TIMER_KEY, physicalHealthLoadedTicks);
         output.putString(VillagerEntityMCA.CHAT_AI_PROMPT_KEY, chatAIPrompt);
         output.put(VillagerEntityMCA.NICKNAMES_KEY, nicknameData.copy());
@@ -327,6 +354,10 @@ public class ZombieVillagerEntityMCA extends ZombieVillager implements VillagerL
 
     @Override
     public void readAdditionalConversionData(CompoundTag input) {
+        soldierData = new CompoundTag();
+        input.getCompound("SoldierOrders").ifPresent(tag -> soldierData.put("SoldierOrders", tag.copy()));
+        input.getCompound("SoldierEquipment").ifPresent(tag -> soldierData.put("SoldierEquipment", tag.copy()));
+        loadSoldierEquipment();
         physicalHealthLoadedTicks = Math.clamp(input.getInt(PhysicalHealth.TIMER_KEY).orElse(0), 0, PhysicalHealth.CYCLE_TICKS - 1);
         chatAIPrompt = input.getString(VillagerEntityMCA.CHAT_AI_PROMPT_KEY).orElse("");
         nicknameData = input.getCompound(VillagerEntityMCA.NICKNAMES_KEY).orElseGet(CompoundTag::new).copy();
@@ -347,6 +378,8 @@ public class ZombieVillagerEntityMCA extends ZombieVillager implements VillagerL
         InventoryUtils.saveToNBT(this.registryAccess(), inventory, nbt);
         nbt.putString(VillagerEntityMCA.CHAT_AI_PROMPT_KEY, chatAIPrompt);
         nbt.putInt(PhysicalHealth.TIMER_KEY, physicalHealthLoadedTicks);
+        if (soldierData.contains("SoldierEquipment")) soldierData.put("SoldierEquipment", SoldierEquipment.saveInventory(registryAccess(), soldierEquipment));
+        nbt.put("SoldierData", soldierData.copy());
         nbt.put(VillagerEntityMCA.NICKNAMES_KEY, nicknameData.copy());
         nbt.put(LongTermMemory.NBT_KEY, longTermMemoryData.copy());
         VillagerEntityMCA.storeMcaSaveData(output, nbt);

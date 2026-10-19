@@ -20,6 +20,9 @@ public interface MessagesMCA {
         c.register(GetInteractDataRequest.TYPE, GetInteractDataRequest.STREAM_CODEC, true);
         c.register(GetVillageRequest.TYPE, GetVillageRequest.STREAM_CODEC, true);
         c.register(GovernVillageMessage.TYPE, GovernVillageMessage.STREAM_CODEC, true);
+        c.register(CommandSoldiersMessage.TYPE, CommandSoldiersMessage.STREAM_CODEC, true);
+        c.register(ArmyOverviewRequest.TYPE, ArmyOverviewRequest.STREAM_CODEC, true);
+        c.register(ArmyOverviewResponse.TYPE, ArmyOverviewResponse.STREAM_CODEC, false);
         c.register(GetVillagerRequest.TYPE, GetVillagerRequest.STREAM_CODEC, true);
         c.register(InteractionCloseRequest.TYPE, InteractionCloseRequest.STREAM_CODEC, true);
         c.register(InteractionDialogueInitMessage.TYPE, InteractionDialogueInitMessage.STREAM_CODEC, true);

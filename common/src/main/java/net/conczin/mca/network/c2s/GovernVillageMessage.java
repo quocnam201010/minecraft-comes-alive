@@ -22,7 +22,7 @@ import java.util.*;
 
 public record GovernVillageMessage(int villageId, Action action, String target, int value, int flags,
                                    List<String> professions) implements HandleablePayload {
-    public enum Action { BAN_PLAYER, PARDON_PLAYER, SET_HOSTILITY, REMOVE_HOSTILITY, FOOD_POLICY }
+    public enum Action { BAN_PLAYER, PARDON_PLAYER, SET_HOSTILITY, REMOVE_HOSTILITY, FOOD_POLICY, APPOINT_RANK, TRANSFER_CROWN, AUTO_SCAN, GRANT_COMMANDER, REVOKE_COMMANDER }
     public static final Type<GovernVillageMessage> TYPE = new Type<>(MCA.locate("govern_village"));
     public static final StreamCodec<FriendlyByteBuf, GovernVillageMessage> STREAM_CODEC = StreamCodec.of((buf, message) -> {
         buf.writeVarInt(message.villageId());
@@ -49,14 +49,13 @@ public record GovernVillageMessage(int villageId, Action action, String target, 
 
     @Override
     public void handleServer(ServerPlayer player) {
-        if (apply(player)) GetVillageRequest.sendResponse(player);
+        if (apply(player)) GetVillageRequest.sendResponse(player, villageId);
     }
 
     /** All permissions and references are rechecked on the authoritative server. */
     public boolean apply(ServerPlayer player) {
         Optional<Village> resolved = VillageManager.get(player.level()).getOrEmpty(villageId);
-        if (resolved.isEmpty() || !resolved.get().isWithinBorder(player)
-                || Tasks.getRank(resolved.get(), player) != Rank.MONARCH) {
+        if (resolved.isEmpty() || Tasks.getRank(resolved.get(), player) != Rank.MONARCH) {
             player.sendSystemMessage(Component.translatable("gui.blueprint.governance.denied"));
             return false;
         }
@@ -69,6 +68,31 @@ public record GovernVillageMessage(int villageId, Action action, String target, 
         }
         try {
             switch (action) {
+                case AUTO_SCAN -> { if (village.isAutoScan() != (value != 0)) village.toggleAutoScan(); }
+                case GRANT_COMMANDER, REVOKE_COMMANDER -> {
+                    UUID id = resolvePlayer(player, politics, target);
+                    if (action == Action.REVOKE_COMMANDER) politics.revokeCommander(id);
+                    else {
+                        ServerPlayer online = player.level().getServer().getPlayerList().getPlayer(id);
+                        String name = online != null ? online.getName().getString() : politics.getKnownPlayers().getOrDefault(id, id.toString());
+                        politics.grantCommander(id, name, online);
+                    }
+                }
+                case APPOINT_RANK, TRANSFER_CROWN -> {
+                    UUID id = resolvePlayer(player, politics, target);
+                    if (id.equals(player.getUUID())) throw new IllegalArgumentException("Cannot change your own appointment");
+                    ServerPlayer online = player.level().getServer().getPlayerList().getPlayer(id);
+                    String name = online != null ? online.getName().getString() : politics.getKnownPlayers().getOrDefault(id, id.toString());
+                    if (action == Action.TRANSFER_CROWN) {
+                        Rank targetRank = online == null ? politics.getForcedRank(id).orElse(Rank.PEASANT) : Tasks.getRank(village, online);
+                        if (targetRank != Rank.MAYOR) throw new IllegalArgumentException("Only a Mayor can inherit the throne");
+                        politics.appoint(id, name, Rank.MONARCH);
+                    } else {
+                        if (value < Rank.PEASANT.ordinal() || value >= Rank.MONARCH.ordinal())
+                            throw new IllegalArgumentException("Invalid appointment");
+                        politics.appoint(id, name, Rank.values()[value]);
+                    }
+                }
                 case BAN_PLAYER, PARDON_PLAYER -> {
                     UUID id = resolvePlayer(player, politics, target);
                     if (action == Action.BAN_PLAYER) {

@@ -19,7 +19,10 @@ public record RenameVillageMessage(int id, String name) implements HandleablePay
 
     @Override
     public void handleServer(ServerPlayer player) {
-        VillageManager.get(player.level()).getOrEmpty(id).ifPresent(v -> v.setName(name));
+        VillageManager.get(player.level()).getOrEmpty(id)
+                .filter(v -> net.conczin.mca.resources.Tasks.getRank(v, player).isAtLeast(net.conczin.mca.resources.Rank.MAYOR))
+                .filter(v -> !name.isBlank() && name.length() <= 64)
+                .ifPresent(v -> v.setName(name.strip()));
     }
 
     @Override

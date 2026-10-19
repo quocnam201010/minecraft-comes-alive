@@ -85,10 +85,17 @@ public record GetVillageResponse(
     private static CompoundTag withDirectory(Village village, ServerPlayer player) {
         CompoundTag data = village.save();
         CompoundTag villages = new CompoundTag();
+        CompoundTag managed = new CompoundTag();
         for (Village candidate : VillageManager.get(player.level())) {
             if (candidate.getId() != village.getId()) villages.putString(Integer.toString(candidate.getId()), candidate.getName());
+            if (net.conczin.mca.network.c2s.GetVillageRequest.canViewRemotely(candidate, player))
+                managed.putString(Integer.toString(candidate.getId()), candidate.getName());
         }
         data.put("VillageDirectory", villages);
+        data.put("ManagedVillages", managed);
+        data.putBoolean("RemoteView", !village.isWithinBorder(player));
+        data.putBoolean("CanCommand", village.getPolitics().canCommand(player));
+        data.putBoolean("CommanderRole", village.getPolitics().isCommander(player.getUUID()));
         CompoundTag players = new CompoundTag();
         village.getPolitics().getKnownPlayers().forEach((id, name) -> players.putString(id.toString(), name));
         village.getPolitics().getBannedPlayers().forEach((id, name) -> players.putString(id.toString(), name));

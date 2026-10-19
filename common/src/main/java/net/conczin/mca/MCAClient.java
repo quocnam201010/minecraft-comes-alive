@@ -15,6 +15,7 @@ import net.minecraft.world.entity.player.Player;
 import java.util.*;
 
 public class MCAClient {
+    public static boolean showVillageNames;
     public static final Map<UUID, VillagerLike<?>> playerData = new HashMap<>();
     public static final Set<UUID> playerDataRequests = new HashSet<>();
     private static final DestinyManager destinyManager = new DestinyManager();
@@ -80,6 +81,7 @@ public class MCAClient {
         if (KeyBindings.SKIN_LIBRARY.consumeClick()) {
             Minecraft.getInstance().gui.setScreen(new SkinLibraryScreen());
         }
+        while (KeyBindings.VILLAGE_NAMES.consumeClick()) showVillageNames = !showVillageNames;
 
         SpeechManager.INSTANCE.tick(client);
     }

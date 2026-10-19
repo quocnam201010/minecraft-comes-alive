@@ -6,6 +6,7 @@ import net.conczin.mca.entity.interaction.Constraint;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.network.chat.Component;
@@ -164,6 +165,9 @@ public abstract class AbstractDynamicScreen extends Screen {
                     a -> screen.buttonPressed(apiButton),
                     DEFAULT_NARRATION);
             this.apiButton = apiButton;
+            if ("gui.button.default_equipment".equals(apiButton.identifier())) {
+                setTooltip(Tooltip.create(Component.translatable("gui.button.default_equipment.tooltip")));
+            }
 
             // Remove the button if we specify it should not be present on constraint failure
             // Otherwise we just mark the button as disabled.
@@ -176,6 +180,10 @@ public abstract class AbstractDynamicScreen extends Screen {
         }
 
         private static Component getButtonMessage(MCAButton apiButton, AbstractDynamicScreen screen) {
+            if ("gui.button.default_equipment".equals(apiButton.identifier())) {
+                return Component.translatable(screen.getConstraints().contains(Constraint.DEFAULT_EQUIPMENT)
+                        ? "gui.button.default_equipment.enabled" : "gui.button.default_equipment.disabled");
+            }
             if ("gui.button.ridehorse".equals(apiButton.identifier())
                     && screen.getConstraints().contains(Constraint.RIDING)) {
                 return Component.translatable("gui.button.dismount");

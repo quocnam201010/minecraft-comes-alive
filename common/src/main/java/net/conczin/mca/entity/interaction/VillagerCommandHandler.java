@@ -72,8 +72,18 @@ public class VillagerCommandHandler extends EntityCommandHandler<VillagerEntityM
     @SuppressWarnings("deprecation")
     public boolean handle(ServerPlayer player, String command) {
         Memories memory = entity.getVillagerBrain().getMemoriesForPlayer(player);
+        if (entity.isGuard() && !player.isCreative() && !net.conczin.mca.entity.ai.SoldierOrders.canCommand(player, entity)
+                && (MoveState.byCommand(command).isPresent() || Chore.byCommand(command).isPresent()
+                || command.startsWith("profession.") || java.util.Set.of("inventory", "armor", "stopworking", "sethome", "setworkplace", "gohome", "ridehorse").contains(command))) {
+            player.sendSystemMessage(Component.translatable("gui.command.denied"));
+            return true;
+        }
 
         if (MoveState.byCommand(command).filter(state -> {
+            if (entity.isGuard() && net.conczin.mca.entity.ai.SoldierOrders.canCommand(player, entity)) {
+                entity.getSoldierOrders().movement(player, state);
+                return true;
+            }
             entity.getVillagerBrain().setMoveState(state, player);
             return true;
         }).isPresent()) {
@@ -98,6 +108,13 @@ public class VillagerCommandHandler extends EntityCommandHandler<VillagerEntityM
         }
 
         switch (command) {
+            case "default_equipment" -> {
+                if (!entity.getSoldierEquipment().toggleDefaultEquipment(player)) {
+                    player.sendSystemMessage(Component.translatable("gui.command.denied"));
+                }
+                new net.conczin.mca.network.c2s.GetInteractDataRequest(entity.getId()).handleServer(player);
+                return false;
+            }
             case "pick_up" -> {
                 return handlePickUp(player);
             }
@@ -144,6 +161,8 @@ public class VillagerCommandHandler extends EntityCommandHandler<VillagerEntityM
                 return false;
             }
             case "inventory" -> {
+                if (player.distanceToSqr(entity) > 64 || entity.isGuard() && !player.isCreative()
+                        && !net.conczin.mca.entity.ai.SoldierOrders.canCommand(player, entity)) return true;
                 player.openMenu(entity);
                 return false;
             }

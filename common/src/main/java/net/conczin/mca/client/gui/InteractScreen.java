@@ -5,6 +5,7 @@ import net.conczin.mca.entity.VillagerLike;
 import net.conczin.mca.entity.VillagerEntityMCA;
 import net.conczin.mca.entity.ai.Genetics;
 import net.conczin.mca.entity.ai.Memories;
+import net.conczin.mca.entity.ai.PhysicalHealth;
 import net.conczin.mca.entity.ai.Traits;
 import net.conczin.mca.entity.ai.brain.VillagerBrain;
 import net.conczin.mca.entity.ai.relationship.CompassionateEntity;
@@ -26,6 +27,8 @@ import net.minecraft.world.entity.player.Player;
 import org.joml.Matrix3x2fStack;
 import org.lwjgl.glfw.GLFW;
 
+import java.text.DecimalFormat;
+import java.text.DecimalFormatSymbols;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -44,6 +47,7 @@ public class InteractScreen extends AbstractDynamicScreen {
     private String dialogAnswerHover;
     private List<FormattedCharSequence> dialogQuestionText;
     private String dialogQuestionId;
+    private final DecimalFormat physicalHealthFormat = new DecimalFormat("0.####", DecimalFormatSymbols.getInstance(Locale.ROOT));
 
     public InteractScreen(VillagerLike<?> villager) {
         super(Component.literal("Interact"));
@@ -95,7 +99,9 @@ public class InteractScreen extends AbstractDynamicScreen {
         super.extractRenderState(context, mouseX, mouseY, tickDelta);
 
         drawIcons(context);
+        drawAdditionalInformation(context);
         drawTextPopups(context);
+        drawPhysicalHealthBenefits(context);
     }
 
     @Override
@@ -231,12 +237,6 @@ public class InteractScreen extends AbstractDynamicScreen {
         }
 
         //hearts
-        if (villager instanceof VillagerEntityMCA npc) {
-            drawTooltip(context, Component.translatable("gui.interact.physical_health", npc.getPhysicalHealth().get()),
-                    10, 30 + h * 5);
-        }
-
-        //hearts
         if (hoveringOverIcon("redHeart")) {
             int hearts = brain.getMemoriesForPlayer(player).getHearts();
             drawHoveringIconText(context, Component.literal(hearts + " hearts"), "redHeart");
@@ -328,6 +328,59 @@ public class InteractScreen extends AbstractDynamicScreen {
     //tooltips are not rendered on the given coordinates, so we need an offset
     private boolean hoveringOverText(int x, int y, int w) {
         return hoveringOver(x + 8, y - 16, w, 16);
+    }
+
+    private int physicalHealthY() { return height - 26; }
+
+    private Component villageLabel(VillagerEntityMCA npc) {
+        String home = npc.getResidency().getVillageName();
+        return home.isBlank() ? Component.translatable("gui.interact.no_village")
+                : Component.translatable("gui.interact.village", home);
+    }
+
+    private Component fitInformationLabel(Component label) {
+        int maxWidth = Math.min(200, width - 140);
+        if (font.width(label) <= maxWidth) return label;
+        return Component.literal(font.plainSubstrByWidth(label.getString(), Math.max(20, maxWidth - font.width("..."))) + "...");
+    }
+
+    private void drawAdditionalInformation(GuiGraphicsExtractor context) {
+        if (!(villager instanceof VillagerEntityMCA npc)) return;
+        // Keep the new rows below the existing hearts/family/analysis icons. Draw
+        // these first so expanded trait and icon tooltips always remain on top.
+        drawTooltip(context, fitInformationLabel(Component.translatable("gui.interact.physical_health", npc.getPhysicalHealth().get())), 10, physicalHealthY());
+        drawTooltip(context, fitInformationLabel(villageLabel(npc)), 10, physicalHealthY() + 17);
+    }
+
+    private void drawPhysicalHealthBenefits(GuiGraphicsExtractor context) {
+        if (!(villager instanceof VillagerEntityMCA npc)) return;
+        PhysicalHealth health = npc.getPhysicalHealth();
+        Component label = Component.translatable("gui.interact.physical_health", health.get());
+        int y = physicalHealthY();
+        Component villageLabel = villageLabel(npc);
+        if (hoveringOverText(10, y + 17, font.width(fitInformationLabel(villageLabel)) + 8)) {
+            drawTooltip(context, villageLabel, 10, y + 17);
+            return;
+        }
+        if (!hoveringOverText(10, y, font.width(fitInformationLabel(label)) + 8)) return;
+
+        List<Component> lines = new ArrayList<>();
+        lines.add(label.copy().withStyle(ChatFormatting.GOLD));
+        lines.add(Component.translatable("gui.interact.physical_health.current_benefits").withStyle(ChatFormatting.GRAY));
+        addPhysicalHealthBonuses(lines, health.getMaxHealthBonus(), health.getAttackDamageBonus(),
+                health.getMovementSpeedBonus(), ChatFormatting.GREEN);
+        lines.add(Component.empty());
+        lines.add(Component.translatable("gui.interact.physical_health.maximum_benefits", PhysicalHealth.MAXIMUM).withStyle(ChatFormatting.GRAY));
+        addPhysicalHealthBonuses(lines, PhysicalHealth.MAX_HEALTH_BONUS, PhysicalHealth.MAX_ATTACK_DAMAGE_BONUS,
+                PhysicalHealth.MAX_MOVEMENT_SPEED_BONUS, ChatFormatting.WHITE);
+        drawTooltip(context, lines, 10, y);
+    }
+
+    private void addPhysicalHealthBonuses(List<Component> lines, double health, double damage, double speed, ChatFormatting color) {
+        lines.add(Component.translatable("gui.interact.physical_health.health_bonus", physicalHealthFormat.format(health)).withStyle(color));
+        lines.add(Component.translatable("gui.interact.physical_health.damage_bonus", physicalHealthFormat.format(damage)).withStyle(color));
+        lines.add(Component.translatable("gui.interact.physical_health.speed_bonus", physicalHealthFormat.format(1.0D + speed),
+                physicalHealthFormat.format(speed * 100.0D)).withStyle(color));
     }
 
     private boolean canDrawParentsIcon() {

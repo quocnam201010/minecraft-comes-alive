@@ -38,7 +38,7 @@ public final class FoodWarehouse {
         Optional<Village> home = villager.getResidency().getHomeVillage();
         if (home.isEmpty() || !home.get().getPolitics().canUseWarehouse(villager)) return 0;
         Village village = home.get();
-        int budget = Math.min(capacity, village.getPolitics().getFoodBudget());
+        int budget = village.getPolitics().getFoodBudget();
         int consumed = 0;
         Set<BlockPos> visited = new HashSet<>();
         List<Building> warehouses = village.getBuildings().values().stream()
@@ -54,20 +54,28 @@ public final class FoodWarehouse {
                 if (!visited.add(pos)) continue;
                 Container chest = (Container) level.getBlockEntity(pos);
                 if (chest == null) continue;
-                consumed += consume(level, pos, chest, budget - consumed);
-                if (consumed >= budget) return consumed;
+                consumed += consume(level, pos, chest, budget - consumed, capacity - consumed);
+                if (consumed >= budget || consumed >= capacity) return consumed;
             }
         }
         return consumed;
     }
 
     static int consume(ServerLevel level, BlockPos pos, Container chest, int budget) {
+        return consume(level, pos, chest, budget, budget);
+    }
+
+    private static int consume(ServerLevel level, BlockPos pos, Container chest, int budget, int capacity) {
         int consumed = 0;
-        for (int slot = 0; slot < chest.getContainerSize() && consumed < budget; slot++) {
+        for (int slot = 0; slot < chest.getContainerSize() && consumed < budget && consumed < capacity; slot++) {
             ItemStack stack = chest.getItem(slot);
             int points = foodPoints(stack);
             if (points <= 0 || points > budget - consumed || !VillagerEntityMCA.isSafeFood(stack)) continue;
-            int amount = Math.min(stack.getCount(), (budget - consumed) / points);
+            // Pay for a whole final item even when only part of its nutrition fits.
+            // PhysicalHealth.set clamps the resulting stat, while the meal allowance
+            // still accounts for every point actually eaten.
+            int needed = (capacity - consumed + points - 1) / points;
+            int amount = Math.min(needed, Math.min(stack.getCount(), (budget - consumed) / points));
             UseRemainder remainder = stack.get(DataComponents.USE_REMAINDER);
             chest.removeItem(slot, amount);
             consumed += amount * points;

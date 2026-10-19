@@ -29,6 +29,7 @@ public class StayTask extends Behavior<VillagerEntityMCA> {
 
     @Override
     protected void tick(ServerLevel world, VillagerEntityMCA villager, long time) {
+        if (villager.isGuard() && villager.getBrain().hasMemoryValue(MemoryModuleType.ATTACK_TARGET)) return;
         villager.getNavigation().stop();
         villager.getBrain().eraseMemory(MemoryModuleType.WALK_TARGET);
     }

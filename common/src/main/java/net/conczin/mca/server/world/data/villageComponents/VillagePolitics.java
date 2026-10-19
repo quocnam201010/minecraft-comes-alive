@@ -31,6 +31,8 @@ public final class VillagePolitics {
 
     private final Village village;
     private final Map<UUID, Rank> forcedRanks = new HashMap<>();
+    private UUID monarch;
+    private final Set<UUID> commanders = new HashSet<>();
     private final Map<UUID, String> knownPlayers = new HashMap<>();
     private final Map<UUID, String> bannedPlayers = new HashMap<>();
     private final Map<Integer, HostilityRule> hostilities = new TreeMap<>();
@@ -49,6 +51,42 @@ public final class VillagePolitics {
     public FoodAccess getFoodAccess() { return foodAccess; }
     public Set<String> getFoodProfessions() { return Set.copyOf(foodProfessions); }
     public int getFoodBudget() { return foodBudget; }
+    public Optional<UUID> getMonarch() { return Optional.ofNullable(monarch); }
+    public Set<UUID> getCommanders() { return Set.copyOf(commanders); }
+    public boolean isCommander(UUID player) { return commanders.contains(player); }
+
+    public void grantCommander(UUID player, String name, ServerPlayer online) {
+        Rank rank = online != null ? Tasks.getRank(village, online) : forcedRanks.getOrDefault(player, Rank.OUTLAW);
+        if (!rank.isAtLeast(Rank.PEASANT) || bannedPlayers.containsKey(player))
+            throw new IllegalArgumentException("Commander appointment requires Peasant rank or higher");
+        knownPlayers.put(player, name);
+        commanders.add(player);
+        village.markDirty();
+    }
+
+    public void revokeCommander(UUID player) {
+        if (commanders.remove(player)) village.markDirty();
+    }
+
+    /** Saved authority for outstanding orders whose issuer may currently be offline. */
+    public boolean hasCommandAuthority(UUID player) {
+        return player.equals(monarch) || commanders.contains(player) && !bannedPlayers.containsKey(player)
+                && forcedRanks.getOrDefault(player, Rank.PEASANT).isAtLeast(Rank.PEASANT);
+    }
+
+    /** The first eligible player claims the vacant throne; ownership is persistent. */
+    public boolean claimMonarch(UUID player) {
+        if (monarch != null) return monarch.equals(player);
+        monarch = player;
+        forcedRanks.put(player, Rank.MONARCH);
+        village.markDirty();
+        return true;
+    }
+
+    public boolean canCommand(ServerPlayer player) {
+        Rank rank = Tasks.getRank(village, player);
+        return rank == Rank.MONARCH || isCommander(player.getUUID()) && rank.isAtLeast(Rank.PEASANT);
+    }
 
     public void rememberPlayer(Player player) {
         if (!Objects.equals(knownPlayers.put(player.getUUID(), player.getName().getString()), player.getName().getString())) {
@@ -57,23 +95,36 @@ public final class VillagePolitics {
     }
 
     public boolean knowsPlayer(UUID player) {
-        return knownPlayers.containsKey(player) || forcedRanks.containsKey(player) || village.hasReputation(player);
+        return knownPlayers.containsKey(player) || forcedRanks.containsKey(player) || commanders.contains(player) || village.hasReputation(player);
     }
 
     public void forceRank(Player player, Rank rank) {
         rememberPlayer(player);
-        forcedRanks.put(player.getUUID(), rank);
-        bannedPlayers.remove(player.getUUID());
+        appoint(player.getUUID(), player.getName().getString(), rank);
+    }
+
+    public void appoint(UUID player, String name, Rank rank) {
+        if (rank == Rank.MONARCH) {
+            if (monarch != null && !monarch.equals(player)) forcedRanks.put(monarch, Rank.MAYOR);
+            monarch = player;
+        } else if (player.equals(monarch)) monarch = null;
+        knownPlayers.put(player, name);
+        forcedRanks.put(player, rank);
+        if (rank == Rank.OUTLAW) commanders.remove(player);
+        bannedPlayers.remove(player);
         village.markDirty();
     }
 
     public void clearForcedRank(UUID player) {
+        if (player.equals(monarch)) monarch = null;
         forcedRanks.remove(player);
         village.markDirty();
     }
 
     public void banPlayer(UUID player, String name) {
+        if (player.equals(monarch)) throw new IllegalArgumentException("Cannot ban the reigning Monarch");
         bannedPlayers.put(player, name);
+        commanders.remove(player);
         forcedRanks.remove(player);
         village.markDirty();
     }
@@ -151,6 +202,10 @@ public final class VillagePolitics {
         CompoundTag ranks = new CompoundTag();
         forcedRanks.forEach((id, rank) -> ranks.putString(id.toString(), rank.name()));
         tag.put("forcedRanks", ranks);
+        CompoundTag roles = new CompoundTag();
+        commanders.forEach(id -> roles.putBoolean(id.toString(), true));
+        tag.put("commanders", roles);
+        if (monarch != null) tag.putString("monarch", monarch.toString());
         tag.put("knownPlayers", namesToNbt(knownPlayers));
         tag.put("bannedPlayers", namesToNbt(bannedPlayers));
         ListTag rules = new ListTag();
@@ -164,11 +219,32 @@ public final class VillagePolitics {
 
     public void load(CompoundTag tag) {
         forcedRanks.clear();
-        CompoundTag ranks = tag.getCompound("forcedRanks").orElseGet(CompoundTag::new);
-        for (String key : ranks.keySet()) {
-            try { forcedRanks.put(UUID.fromString(key), Rank.valueOf(ranks.getString(key).orElse("PEASANT"))); }
+        commanders.clear();
+        CompoundTag roles = tag.getCompound("commanders").orElseGet(CompoundTag::new);
+        for (String key : roles.keySet()) {
+            try { if (roles.getBoolean(key).orElse(false)) commanders.add(UUID.fromString(key)); }
             catch (IllegalArgumentException ignored) { }
         }
+        CompoundTag ranks = tag.getCompound("forcedRanks").orElseGet(CompoundTag::new);
+        for (String key : ranks.keySet()) {
+            try {
+                UUID id = UUID.fromString(key);
+                String name = ranks.getString(key).orElse("PEASANT");
+                // The old Commander rank overwrote the player's civil rank. Restore
+                // ordinary civil progression and keep the separate military role.
+                if ("COMMANDER".equals(name)) commanders.add(id);
+                else forcedRanks.put(id, Rank.valueOf(name));
+            }
+            catch (IllegalArgumentException ignored) { }
+        }
+        monarch = null;
+        try { monarch = UUID.fromString(tag.getString("monarch").orElse("")); }
+        catch (IllegalArgumentException ignored) { }
+        // Older saves allowed several forced Monarchs. Choose one deterministically
+        // and retain the others as appointed Mayors.
+        if (monarch == null) monarch = forcedRanks.entrySet().stream()
+                .filter(entry -> entry.getValue() == Rank.MONARCH).map(Map.Entry::getKey).sorted().findFirst().orElse(null);
+        normalizeMonarch();
         loadNames(tag.getCompound("knownPlayers").orElseGet(CompoundTag::new), knownPlayers);
         loadNames(tag.getCompound("bannedPlayers").orElseGet(CompoundTag::new), bannedPlayers);
         hostilities.clear();
@@ -177,7 +253,8 @@ public final class VillagePolitics {
             CompoundTag rule = rules.getCompound(i).orElseGet(CompoundTag::new);
             int id = rule.getInt("village").orElse(-1);
             if (id < 0 || id == village.getId()) continue;
-            hostilities.put(id, new HostilityRule(id, Rank.fromName(rule.getString("minimumRank").orElse("peasant")),
+            String minimum = rule.getString("minimumRank").orElse("peasant");
+            hostilities.put(id, new HostilityRule(id, "COMMANDER".equalsIgnoreCase(minimum) ? Rank.MAYOR : Rank.fromName(minimum),
                     rule.getBoolean("players").orElse(true), rule.getBoolean("villagers").orElse(true)));
         }
         try { foodAccess = FoodAccess.valueOf(tag.getString("foodAccess").orElse("EVERYONE")); }
@@ -191,11 +268,19 @@ public final class VillagePolitics {
 
     public void merge(VillagePolitics other) {
         other.forcedRanks.forEach(forcedRanks::putIfAbsent);
+        commanders.addAll(other.commanders);
+        if (monarch == null) monarch = other.monarch;
+        normalizeMonarch();
         knownPlayers.putAll(other.knownPlayers);
         bannedPlayers.putAll(other.bannedPlayers);
         other.hostilities.forEach(hostilities::putIfAbsent);
         hostilities.remove(village.getId());
         hostilities.remove(other.village.getId());
+    }
+
+    private void normalizeMonarch() {
+        forcedRanks.replaceAll((id, rank) -> rank == Rank.MONARCH && !id.equals(monarch) ? Rank.MAYOR : rank);
+        if (monarch != null) forcedRanks.put(monarch, Rank.MONARCH);
     }
 
     private static CompoundTag namesToNbt(Map<UUID, String> names) {

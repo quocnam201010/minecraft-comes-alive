@@ -149,6 +149,7 @@ public class GuardEnemiesSensor extends Sensor<LivingEntity> {
                     configuredPriority
             );
             if (priority < 0
+                    || !entity.getSoldierOrders().canEngage(target)
                     || !isWithinGuardEnemyRange(entity, target, followedPlayer)
                     || !isVisibleToGuard(entity, target, followedPlayer)) {
                 continue;
@@ -171,6 +172,7 @@ public class GuardEnemiesSensor extends Sensor<LivingEntity> {
             Optional<Player> followedPlayer,
             Optional<Integer> configuredPriority
     ) {
+        if (guard instanceof VillagerEntityMCA soldier && soldier.getSoldierOrders().isOrderedTarget(entity)) return 12;
         if (guard instanceof VillagerEntityMCA soldier && VillagePolitics.isEnemy(soldier, entity)) {
             return entity instanceof Player player && (player.isCreative() || player.isSpectator()) ? -1 : 11;
         }
@@ -243,6 +245,7 @@ public class GuardEnemiesSensor extends Sensor<LivingEntity> {
 
     public static boolean isGuardEnemy(LivingEntity entity, LivingEntity guard) {
         return entity.isAlive()
+               && (!(guard instanceof VillagerEntityMCA soldier) || soldier.getSoldierOrders().canEngage(entity))
                && !entity.isRemoved()
                && (guard == null || entity.level() == guard.level())
                && getPriority(

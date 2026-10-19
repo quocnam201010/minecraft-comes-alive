@@ -3,6 +3,7 @@ package net.conczin.mca.network;
 import net.conczin.mca.network.s2c.*;
 
 public interface ClientHandler {
+    void handleArmyOverview(ArmyOverviewResponse response);
     void handleGuiRequest(OpenGuiRequest message);
 
     void handleChatAIContextResponse(ChatAIContextResponse message);

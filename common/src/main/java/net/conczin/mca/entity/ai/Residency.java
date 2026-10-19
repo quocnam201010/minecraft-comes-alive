@@ -38,6 +38,7 @@ import java.util.stream.Stream;
  */
 public class Residency {
     private static final CDataParameter<Integer> VILLAGE = CParameter.create("HomeVillage", -1);
+    private static final CDataParameter<String> VILLAGE_NAME = CParameter.create("HomeVillageName", "");
     private static final int WORKPLACE_SEARCH_RADIUS = 8;
     private final VillagerEntityMCA entity;
     private final BedDebugLog bedDebugLog = new BedDebugLog();
@@ -47,8 +48,11 @@ public class Residency {
     }
 
     public static <E extends Entity> CDataManager.Builder<E> createTrackedData(CDataManager.Builder<E> builder) {
-        return builder.addAll(VILLAGE);
+        return builder.addAll(VILLAGE, VILLAGE_NAME);
     }
+
+    public int getVillageId() { return entity.getTrackedValue(VILLAGE); }
+    public String getVillageName() { return entity.getTrackedValue(VILLAGE_NAME); }
 
     public BlockPos getWorkplace() {
         return entity.getBrain()
@@ -187,6 +191,7 @@ public class Residency {
                     getHome().ifPresent(this::invalidateHome);
                 }
                 entity.setTrackedValue(VILLAGE, v.getId());
+                entity.setTrackedValue(VILLAGE_NAME, v.getName());
             });
         }
     }
@@ -220,9 +225,12 @@ public class Residency {
     public void leaveVillage() {
         getHomeVillage().ifPresent(village -> village.removeResident(entity));
         entity.setTrackedValue(VILLAGE, -1);
+        entity.setTrackedValue(VILLAGE_NAME, "");
     }
 
     public void tick() {
+        if (entity.tickCount % 20 == 0 || entity.tickCount == 1)
+            entity.setTrackedValue(VILLAGE_NAME, getHomeVillage().map(Village::getName).orElse(""));
         bedDebugLog.tick(entity);
         //report buildings close by
         if (entity.requiresHome() && (entity.tickCount == 1 || entity.tickCount % 600 == 0)) {

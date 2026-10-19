@@ -81,6 +81,10 @@ public enum Constraint implements BiPredicate<VillagerLike<?>, ServerPlayer> {
     NOT_MAYOR("!mayor", (villager, player) -> !isRankAtLeast(villager, player, Rank.MAYOR)),
 
     MONARCH("monarch", (villager, player) -> isRankAtLeast(villager, player, Rank.MONARCH)),
+    COMMAND_SOLDIER("command_soldier", (villager, player) -> villager instanceof VillagerEntityMCA soldier
+            && net.conczin.mca.entity.ai.SoldierOrders.canCommand(player, soldier)),
+    DEFAULT_EQUIPMENT("default_equipment", (villager, player) -> villager instanceof VillagerEntityMCA soldier
+            && soldier.getSoldierEquipment().usesDefaultEquipment()),
     NOT_MONARCH("!monarch", (villager, player) -> !isRankAtLeast(villager, player, Rank.MONARCH)),
 
     ORPHAN("orphan", Relationship.IS_ORPHAN.asConstraint()),

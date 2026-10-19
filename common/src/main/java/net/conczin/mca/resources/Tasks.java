@@ -52,11 +52,13 @@ public class Tasks extends SimpleJsonResourceReloadListener<JsonElement> {
             return village.getPolitics().getForcedRank(player.getUUID()).orElseThrow();
         }
         if (player != null && PlayerSaveData.get(player).isOverrideVillageRequirements()) {
-            return Rank.MONARCH;
+            return village.getPolitics().claimMonarch(player.getUUID()) ? Rank.MONARCH : Rank.MAYOR;
         }
         Rank[] ranks = Rank.values();
         for (int i = ranks.length - 1; i >= 0; i--) {
             if (getInstance().tasks.get(ranks[i]).stream().allMatch(t -> !t.isRequired() || t.isCompleted(village, player))) {
+                if (ranks[i] == Rank.MONARCH && (player == null
+                        || !village.getPolitics().claimMonarch(player.getUUID()))) continue;
                 return ranks[i];
             }
         }

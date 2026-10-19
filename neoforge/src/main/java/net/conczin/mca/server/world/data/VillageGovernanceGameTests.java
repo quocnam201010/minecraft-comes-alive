@@ -13,6 +13,16 @@ import net.conczin.mca.entity.ai.brain.sensor.GuardEnemiesSensor;
 import net.conczin.mca.neoforge.gametest.GameTest;
 import net.conczin.mca.neoforge.gametest.PrefixGameTestTemplate;
 import net.conczin.mca.network.c2s.GovernVillageMessage;
+import net.conczin.mca.network.c2s.CommandSoldiersMessage;
+import net.conczin.mca.network.c2s.ArmyOverviewRequest;
+import net.conczin.mca.network.c2s.GetVillageRequest;
+import net.conczin.mca.entity.ai.MoveState;
+import net.conczin.mca.entity.ai.MemoryModuleTypeMCA;
+import net.conczin.mca.entity.SoldierInventoryMenu;
+import net.conczin.mca.entity.SoldierEquipment;
+import net.conczin.mca.entity.EquipmentSet;
+import net.conczin.mca.entity.ai.brain.tasks.EquipmentTask;
+import net.conczin.mca.entity.interaction.Constraint;
 import net.conczin.mca.registry.ProfessionsMCA;
 import net.conczin.mca.resources.BuildingTypes;
 import net.conczin.mca.resources.Rank;
@@ -188,13 +198,16 @@ public final class VillageGovernanceGameTests {
     }
 
     @GameTest(templateNamespace = "minecraft", template = "bastion/blocks/air")
-    public static void governanceRejectsForgedRemoteAndInvalidPolicyChanges(GameTestHelper helper) throws Exception {
+    public static void governanceAllowsRemoteMonarchButRejectsForgedAndInvalidChanges(GameTestHelper helper) throws Exception {
         try (Fixture fixture = fixture(helper)) {
             GovernVillageMessage ban = message(fixture, GovernVillageMessage.Action.BAN_PLAYER, UUID.randomUUID().toString(), 0, 0);
             helper.assertTrue(!ban.apply(fixture.player()), "non-Monarch forged a village ban");
             fixture.village().getPolitics().forceRank(fixture.player(), Rank.MONARCH);
             fixture.player().setPos(Vec3.atBottomCenterOf(fixture.base().east(200)));
-            helper.assertTrue(!ban.apply(fixture.player()), "Monarch changed a village remotely");
+            helper.assertTrue(ban.apply(fixture.player()), "Monarch could not change a village remotely");
+            helper.assertTrue(GetVillageRequest.canViewRemotely(fixture.village(), fixture.player()), "remote village selection rejected the Monarch");
+            UUID banned = fixture.village().getPolitics().getBannedPlayers().keySet().iterator().next();
+            fixture.village().getPolitics().pardonPlayer(banned);
             fixture.player().setPos(Vec3.atBottomCenterOf(fixture.base()));
             helper.assertTrue(!message(fixture, GovernVillageMessage.Action.BAN_PLAYER, fixture.player().getUUID().toString(), 0, 0)
                     .apply(fixture.player()), "Monarch could ban themselves");
@@ -427,6 +440,525 @@ public final class VillageGovernanceGameTests {
 
     private static GovernVillageMessage message(Fixture fixture, GovernVillageMessage.Action action, String target, int value, int flags) {
         return new GovernVillageMessage(fixture.village().getId(), action, target, value, flags, List.of());
+    }
+
+    @GameTest(templateNamespace = "minecraft", template = "bastion/blocks/air")
+    public static void breadMealsReachExactlyOneThousandWithoutExceedingTheAllowance(GameTestHelper helper) throws Exception {
+        try (Fixture fixture = fixture(helper)) {
+            fixture.chest(0).setItem(0, new ItemStack(Items.BREAD, 64));
+            fixture.civilian().getPhysicalHealth().set(992);
+            for (int i = 0; i < PhysicalHealth.CYCLE_TICKS; i++) fixture.civilian().getPhysicalHealth().tick();
+            helper.assertTrue(fixture.civilian().getPhysicalHealth().get() == 1000, "a whole final bread was rejected instead of clamping to 1000");
+            helper.assertTrue(fixture.chest(0).getItem(0).getCount() == 60, "rounding ate more or less than four loaves");
+            fixture.village().getPolitics().setFoodPolicy(VillagePolitics.FoodAccess.EVERYONE, 10, List.of());
+            helper.assertTrue(FoodWarehouse.feed(fixture.civilian(), 1) == 0 && fixture.chest(0).getItem(0).getCount() == 60,
+                    "the final-item exception bypassed the actual meal allowance");
+            fixture.village().getPolitics().setFoodPolicy(VillagePolitics.FoodAccess.EVERYONE, 200, List.of());
+            helper.assertTrue(FoodWarehouse.feed(fixture.civilian(), 1) == 11 && fixture.chest(0).getItem(0).getCount() == 59,
+                    "a single point of remaining health could not consume one whole bread");
+            helper.succeed();
+        }
+    }
+
+    @GameTest(templateNamespace = "minecraft", template = "bastion/blocks/air")
+    public static void appointmentsPersistAndOnlyOneMonarchCanReign(GameTestHelper helper) throws Exception {
+        try (Fixture fixture = fixture(helper)) {
+            ServerPlayer successor = mockPlayer(helper, fixture.base());
+            fixture.village().getPolitics().forceRank(fixture.player(), Rank.MONARCH);
+            helper.assertTrue(message(fixture, GovernVillageMessage.Action.APPOINT_RANK, successor.getUUID().toString(), Rank.PEASANT.ordinal(), 0).apply(fixture.player()),
+                    "Monarch could not appoint a Peasant without reputation");
+            helper.assertTrue(message(fixture, GovernVillageMessage.Action.GRANT_COMMANDER, successor.getUUID().toString(), 0, 0).apply(fixture.player()),
+                    "Monarch could not appoint a Commander role");
+            helper.assertTrue(Tasks.getRank(fixture.village(), successor) == Rank.PEASANT && fixture.village().getPolitics().isCommander(successor.getUUID()),
+                    "Commander role changed the civil rank");
+            Village loaded = new Village(fixture.village().save(), helper.getLevel());
+            helper.assertTrue(Tasks.getRank(loaded, successor) == Rank.PEASANT && loaded.getPolitics().canCommand(successor), "Commander role did not persist independently of rank");
+            helper.assertTrue(!message(fixture, GovernVillageMessage.Action.TRANSFER_CROWN, successor.getUUID().toString(), 0, 0).apply(fixture.player()),
+                    "crown was transferred to a non-Mayor");
+            message(fixture, GovernVillageMessage.Action.APPOINT_RANK, successor.getUUID().toString(), Rank.MAYOR.ordinal(), 0).apply(fixture.player());
+            helper.assertTrue(message(fixture, GovernVillageMessage.Action.TRANSFER_CROWN, successor.getUUID().toString(), 0, 0).apply(fixture.player()),
+                    "Monarch could not transfer ownership to an appointed Mayor");
+            helper.assertTrue(Tasks.getRank(fixture.village(), successor) == Rank.MONARCH && Tasks.getRank(fixture.village(), fixture.player()) == Rank.MAYOR,
+                    "ownership transfer left two Monarchs or lost the former ruler's Mayor rank");
+            helper.assertTrue(!message(fixture, GovernVillageMessage.Action.FOOD_POLICY, "EVERYONE", 30, 0).apply(fixture.player()),
+                    "former Monarch retained policy permissions");
+            Village transferred = new Village(fixture.village().save(), helper.getLevel());
+            helper.assertTrue(Tasks.getRank(transferred, successor) == Rank.MONARCH && Tasks.getRank(transferred, fixture.player()) == Rank.MAYOR,
+                    "saving lost the ownership transfer");
+            successor.discard();
+            helper.succeed();
+        }
+    }
+
+    @GameTest(templateNamespace = "minecraft", template = "bastion/blocks/air")
+    public static void oldSavesWithSeveralMonarchsAreReconciled(GameTestHelper helper) throws Exception {
+        try (Fixture fixture = fixture(helper)) {
+            UUID first = UUID.randomUUID(), second = UUID.randomUUID();
+            CompoundTag data = fixture.village().save();
+            CompoundTag politics = data.getCompound("politics").orElseThrow();
+            CompoundTag ranks = new CompoundTag();
+            ranks.putString(first.toString(), "MONARCH"); ranks.putString(second.toString(), "MONARCH");
+            politics.put("forcedRanks", ranks); politics.remove("monarch");
+            Village loaded = new Village(data, helper.getLevel());
+            long monarchs = java.util.stream.Stream.of(first, second).filter(id -> loaded.getPolitics().getForcedRank(id).orElseThrow() == Rank.MONARCH).count();
+            helper.assertTrue(monarchs == 1 && loaded.getPolitics().getMonarch().isPresent(), "legacy multiple-Monarch state was not reconciled");
+            helper.succeed();
+        }
+    }
+
+    @GameTest(templateNamespace = "minecraft", template = "bastion/blocks/air")
+    public static void commanderCanOrderOwnLoadedSoldiersRemotelyButCannotGovern(GameTestHelper helper) throws Exception {
+        try (Fixture fixture = fixture(helper); Fixture foreign = fixture(helper, fixtureOrigin(helper).east(200))) {
+            fixture.village().getPolitics().forceRank(fixture.player(), Rank.PEASANT);
+            fixture.village().getPolitics().grantCommander(fixture.player().getUUID(), fixture.player().getName().getString(), fixture.player());
+            fixture.player().setPos(Vec3.atBottomCenterOf(foreign.base()));
+            helper.assertTrue(command(fixture, CommandSoldiersMessage.Action.STAY, BlockPos.ZERO, "", 0).apply(fixture.player()), "Commander could not issue a remote stay order");
+            helper.assertTrue(fixture.soldier().getVillagerBrain().getMoveState() == MoveState.STAY, "stay order did not change the actual brain state");
+            helper.assertTrue(!new CommandSoldiersMessage(foreign.village().getId(), CommandSoldiersMessage.Action.FOLLOW,
+                    List.of(foreign.soldier().getUUID()), BlockPos.ZERO, "", 0).apply(fixture.player()), "Commander could control a foreign soldier");
+            helper.assertTrue(!message(fixture, GovernVillageMessage.Action.FOOD_POLICY, "EVERYONE", 100, 0).apply(fixture.player()), "Commander acquired Monarch policy privileges");
+            helper.assertTrue(!command(fixture, CommandSoldiersMessage.Action.DITCH_DISTANCE, BlockPos.ZERO, "", 3).apply(fixture.player()), "invalid ditch distance was accepted");
+            helper.assertTrue(!new CommandSoldiersMessage(fixture.village().getId(), CommandSoldiersMessage.Action.FREE,
+                    List.of(fixture.soldier().getUUID(), foreign.soldier().getUUID()), BlockPos.ZERO, "", 0).apply(fixture.player()), "mixed-village selection partially applied");
+            fixture.village().getPolitics().revokeCommander(fixture.player().getUUID());
+            helper.assertTrue(!command(fixture, CommandSoldiersMessage.Action.FREE, BlockPos.ZERO, "", 0).apply(fixture.player()), "dismissed Commander retained army access");
+            helper.succeed();
+        }
+    }
+
+    @GameTest(templateNamespace = "minecraft", template = "bastion/blocks/air")
+    public static void soldierMovesToCoordinatesThenHoldsAndRestoresOrdersAfterSaving(GameTestHelper helper) throws Exception {
+        try (Fixture fixture = fixture(helper)) {
+            fixture.village().getPolitics().forceRank(fixture.player(), Rank.PEASANT);
+            fixture.village().getPolitics().grantCommander(fixture.player().getUUID(), fixture.player().getName().getString(), fixture.player());
+            VillagerEntityMCA soldier = fixture.soldier();
+            BlockPos position = fixture.base().south(9).east(4);
+            helper.assertTrue(command(fixture, CommandSoldiersMessage.Action.MOVE_TO, position, "", 0).apply(fixture.player()), "move order was rejected");
+            helper.assertTrue(soldier.getBrain().getMemory(MemoryModuleType.WALK_TARGET).orElseThrow().getTarget().currentBlockPosition().equals(position),
+                    "move order did not create a real pathfinding walk target");
+            CompoundTag saved = new CompoundTag(); soldier.getSoldierOrders().save(saved);
+            soldier.getSoldierOrders().movement(fixture.player(), MoveState.MOVE);
+            soldier.getSoldierOrders().load(saved);
+            helper.assertTrue(soldier.getSoldierOrders().getDestination().orElseThrow().equals(position), "saving lost the destination");
+            soldier.setPos(Vec3.atBottomCenterOf(position)); soldier.getSoldierOrders().tick();
+            helper.assertTrue(soldier.getVillagerBrain().getMoveState() == MoveState.STAY && soldier.getSoldierOrders().getDestination().isEmpty(), "soldier did not hold after arriving");
+            soldier.setPos(Vec3.atBottomCenterOf(position.east(5))); soldier.getSoldierOrders().tick();
+            helper.assertTrue(soldier.getBrain().getMemory(MemoryModuleType.WALK_TARGET).orElseThrow().getTarget().currentBlockPosition().equals(position), "soldier abandoned its hold position after displacement");
+            helper.succeed();
+        }
+    }
+
+    @GameTest(templateNamespace = "minecraft", template = "bastion/blocks/air")
+    public static void followingSoldierAssistsLeaderAndDitchesTargetsAtConfiguredDistance(GameTestHelper helper) throws Exception {
+        try (Fixture fixture = fixture(helper)) {
+            fixture.village().getPolitics().forceRank(fixture.player(), Rank.PEASANT);
+            fixture.village().getPolitics().grantCommander(fixture.player().getUUID(), fixture.player().getName().getString(), fixture.player());
+            command(fixture, CommandSoldiersMessage.Action.FOLLOW, BlockPos.ZERO, "", 0).apply(fixture.player());
+            command(fixture, CommandSoldiersMessage.Action.DITCH_DISTANCE, BlockPos.ZERO, "", 8).apply(fixture.player());
+            var mob = net.minecraft.world.entity.EntityTypes.COW.create(helper.getLevel(), EntitySpawnReason.STRUCTURE);
+            Objects.requireNonNull(mob).setPos(fixture.player().position().add(2, 0, 0));
+            helper.getLevel().addFreshEntity(mob);
+            fixture.player().tickCount = 1; fixture.player().setLastHurtMob(mob);
+            fixture.soldier().getSoldierOrders().tick();
+            helper.assertTrue(fixture.soldier().getBrain().getMemory(MemoryModuleType.ATTACK_TARGET).orElse(null) == mob, "following soldier did not assist against a normally neutral mob attacked by its leader");
+            fixture.soldier().setPos(fixture.player().position().add(9, 0, 0));
+            fixture.soldier().getSoldierOrders().tick();
+            helper.assertTrue(!fixture.soldier().getBrain().hasMemoryValue(MemoryModuleType.ATTACK_TARGET)
+                    && !GuardEnemiesSensor.isGuardEnemy(mob, fixture.soldier()), "soldier retained or reacquired the ditched target");
+            helper.assertTrue(fixture.soldier().getBrain().getMemory(MemoryModuleTypeMCA.PLAYER_FOLLOWING).orElse(null) == fixture.player(), "ditching lost the follow order");
+            mob.discard(); helper.succeed();
+        }
+    }
+
+    @GameTest(templateNamespace = "minecraft", template = "bastion/blocks/air")
+    public static void attackOrdersQueueTargetsAndIgnoreCreativePlayers(GameTestHelper helper) throws Exception {
+        try (Fixture fixture = fixture(helper); Fixture foreign = fixture(helper, fixtureOrigin(helper).east(200))) {
+            fixture.village().getPolitics().forceRank(fixture.player(), Rank.PEASANT);
+            fixture.village().getPolitics().grantCommander(fixture.player().getUUID(), fixture.player().getName().getString(), fixture.player());
+            foreign.soldier().setPos(fixture.soldier().position().add(5, 0, 0));
+            foreign.civilian().setPos(fixture.soldier().position().add(6, 0, 0));
+            helper.assertTrue(command(fixture, CommandSoldiersMessage.Action.ATTACK, BlockPos.ZERO,
+                    foreign.soldier().getUUID() + "," + foreign.civilian().getUUID(), 0).apply(fixture.player()), "dragged multi-target attack order was rejected");
+            foreign.soldier().discard();
+            fixture.soldier().getSoldierOrders().tick(); fixture.soldier().getSoldierOrders().tick();
+            helper.assertTrue(fixture.soldier().getBrain().getMemory(MemoryModuleType.ATTACK_TARGET).orElse(null) == foreign.civilian(), "soldier did not advance to the next queued target");
+            helper.assertTrue(GuardEnemiesSensor.isGuardEnemy(foreign.civilian(), fixture.soldier()), "sensor rejected a commanded civilian target");
+            helper.assertTrue(!command(fixture, CommandSoldiersMessage.Action.ATTACK, BlockPos.ZERO, fixture.soldier().getUUID().toString(), 0).apply(fixture.player()), "soldier could target itself");
+            ((TestPlayer) foreign.player()).mode = GameType.CREATIVE;
+            helper.assertTrue(!fixture.soldier().getSoldierOrders().validTarget(foreign.player()), "manual attack orders bypassed Creative immunity");
+            ((TestPlayer) foreign.player()).mode = GameType.SPECTATOR;
+            helper.assertTrue(!fixture.soldier().getSoldierOrders().validTarget(foreign.player()), "manual attack orders bypassed Spectator immunity");
+            helper.succeed();
+        }
+    }
+
+    @GameTest(templateNamespace = "minecraft", template = "bastion/blocks/air")
+    public static void defaultEquipmentToggleRequiresNearbyHomeOfficer(GameTestHelper helper) throws Exception {
+        try (Fixture fixture = fixture(helper); Fixture foreign = fixture(helper, fixtureOrigin(helper).east(200))) {
+            var equipment = fixture.soldier().getSoldierEquipment();
+            helper.assertTrue(equipment.usesDefaultEquipment(), "existing soldiers did not default to generated gear");
+            fixture.village().getPolitics().forceRank(fixture.player(), Rank.MAYOR);
+            helper.assertTrue(!equipment.toggleDefaultEquipment(fixture.player()), "Mayor without army authority disabled gear");
+            foreign.village().getPolitics().forceRank(fixture.player(), Rank.MONARCH);
+            helper.assertTrue(!equipment.toggleDefaultEquipment(fixture.player()), "foreign Monarch disabled another village's gear");
+            fixture.village().getPolitics().grantCommander(fixture.player().getUUID(), fixture.player().getName().getString(), fixture.player());
+            fixture.player().setPos(fixture.soldier().position().add(9, 0, 0));
+            helper.assertTrue(!equipment.toggleDefaultEquipment(fixture.player()), "remote Commander disabled gear outside interaction range");
+            fixture.player().setPos(fixture.soldier().position().add(2, 0, 0));
+            helper.assertTrue(Constraint.COMMAND_SOLDIER.test(fixture.soldier(), fixture.player())
+                    && Constraint.DEFAULT_EQUIPMENT.test(fixture.soldier(), fixture.player()), "authorized button constraints were missing");
+            helper.assertTrue(equipment.toggleDefaultEquipment(fixture.player()) && !equipment.usesDefaultEquipment()
+                    && !Constraint.DEFAULT_EQUIPMENT.test(fixture.soldier(), fixture.player()), "Commander could not disable defaults and refresh button state");
+            helper.assertTrue(!fixture.civilian().getSoldierEquipment().toggleDefaultEquipment(fixture.player()), "officer could change a civilian's equipment policy");
+            fixture.village().getPolitics().revokeCommander(fixture.player().getUUID());
+            helper.assertTrue(!equipment.toggleDefaultEquipment(fixture.player()), "dismissed Commander retained equipment authority");
+            fixture.village().getPolitics().forceRank(fixture.player(), Rank.MONARCH);
+            helper.assertTrue(equipment.toggleDefaultEquipment(fixture.player()) && equipment.usesDefaultEquipment(), "home Monarch could not restore defaults");
+            helper.succeed();
+        }
+    }
+
+    @GameTest(templateNamespace = "minecraft", template = "bastion/blocks/air")
+    public static void disabledDefaultEquipmentStaysEmptyAndCanBeRestored(GameTestHelper helper) throws Exception {
+        try (Fixture fixture = fixture(helper)) {
+            fixture.village().getPolitics().forceRank(fixture.player(), Rank.MONARCH);
+            VillagerEntityMCA soldier = fixture.soldier();
+            EquipmentTask task = new EquipmentTask(ignored -> true, ignored -> EquipmentSet.GUARD_2);
+            long time = helper.getLevel().getGameTime();
+            helper.assertTrue(task.tryStart(helper.getLevel(), soldier, time)
+                    && soldier.getItemBySlot(EquipmentSlot.CHEST).is(Items.IRON_CHESTPLATE), "fixture did not generate default combat gear");
+            task.tickOrStop(helper.getLevel(), soldier, ++time);
+            helper.assertTrue(soldier.getSoldierEquipment().toggleDefaultEquipment(fixture.player()), "Monarch toggle was rejected");
+            for (EquipmentSlot slot : SoldierEquipment.SLOTS) helper.assertTrue(soldier.getItemBySlot(slot).isEmpty(), "disabling left generated gear in " + slot);
+            soldier.getBrain().setMemory(MemoryModuleType.ATTACK_TARGET, fixture.civilian());
+            task.tryStart(helper.getLevel(), soldier, ++time);
+            task.tickOrStop(helper.getLevel(), soldier, ++time);
+            for (int tick = 0; tick < 80; tick++) {
+                soldier.tickCount++;
+                soldier.getVillagerBrain().setArmorWear(tick % 2 == 0);
+                helper.assertTrue(!task.tryStart(helper.getLevel(), soldier, ++time), "intentionally empty slots repeatedly restarted equipment AI");
+                for (EquipmentSlot slot : SoldierEquipment.SLOTS) helper.assertTrue(soldier.getItemBySlot(slot).isEmpty(), "combat or armor visibility restored disabled defaults");
+            }
+            soldier.setItemSlot(soldier.getDominantSlot(), Items.IRON_SWORD.getDefaultInstance());
+            helper.assertTrue(task.tryStart(helper.getLevel(), soldier, ++time)
+                    && soldier.getItemBySlot(soldier.getDominantSlot()).isEmpty(), "stale generated hand item was not removed");
+            task.tickOrStop(helper.getLevel(), soldier, ++time);
+            helper.assertTrue(soldier.getSoldierEquipment().toggleDefaultEquipment(fixture.player()), "Monarch could not re-enable gear");
+            helper.assertTrue(task.tryStart(helper.getLevel(), soldier, ++time)
+                    && !soldier.getItemBySlot(soldier.getDominantSlot()).isEmpty()
+                    && !soldier.getItemBySlot(EquipmentSlot.CHEST).isEmpty(), "re-enabling did not restore normal generated equipment");
+            helper.succeed();
+        }
+    }
+
+    @GameTest(templateNamespace = "minecraft", template = "bastion/blocks/air")
+    public static void disabledDefaultsUseSuppliedGearWithoutCopies(GameTestHelper helper) throws Exception {
+        try (Fixture fixture = fixture(helper)) {
+            fixture.village().getPolitics().forceRank(fixture.player(), Rank.MONARCH);
+            VillagerEntityMCA soldier = fixture.soldier();
+            var equipment = soldier.getSoldierEquipment();
+            helper.assertTrue(equipment.toggleDefaultEquipment(fixture.player()), "Monarch toggle was rejected");
+            EquipmentTask task = new EquipmentTask(ignored -> true, ignored -> EquipmentSet.GUARD_2);
+            long time = helper.getLevel().getGameTime();
+            ItemStack sword = Items.DIAMOND_SWORD.getDefaultInstance(); sword.setDamageValue(17);
+            ItemStack chest = Items.IRON_CHESTPLATE.getDefaultInstance();
+            soldier.getInventory().setItem(0, sword);
+            soldier.getInventory().setItem(1, chest);
+            helper.assertTrue(task.tryStart(helper.getLevel(), soldier, time)
+                    && soldier.getItemBySlot(soldier.getDominantSlot()) == sword
+                    && soldier.getItemBySlot(EquipmentSlot.CHEST) == chest, "supplies were ignored or duplicated with defaults off");
+            task.tickOrStop(helper.getLevel(), soldier, ++time);
+            ItemStack explicit = Items.DIAMOND_CHESTPLATE.getDefaultInstance(); explicit.setDamageValue(9);
+            equipment.getInventory().setItem(3, explicit);
+            helper.assertTrue(soldier.getItemBySlot(EquipmentSlot.CHEST) == explicit, "explicit armor did not override supplies");
+            TagValueOutput saved = TagValueOutput.createWithContext(ProblemReporter.DISCARDING, soldier.registryAccess());
+            soldier.addAdditionalSaveData(saved);
+            VillagerEntityMCA restored = VillagerFactory.newVillager(helper.getLevel()).withAge(0).withPosition(soldier.position()).build();
+            restored.readAdditionalSaveData(TagValueInput.create(ProblemReporter.DISCARDING, restored.registryAccess(), saved.buildResult()));
+            helper.assertTrue(!restored.getSoldierEquipment().usesDefaultEquipment()
+                    && restored.getItemBySlot(EquipmentSlot.CHEST).getDamageValue() == 9
+                    && restored.getItemBySlot(restored.getDominantSlot()).getDamageValue() == 17
+                    && restored.getItemBySlot(EquipmentSlot.HEAD).isEmpty(), "reload lost the disabled policy or supplied gear durability");
+            equipment.getInventory().setItem(3, ItemStack.EMPTY);
+            helper.assertTrue(soldier.getItemBySlot(EquipmentSlot.CHEST) == chest, "removing explicit armor did not fall back to actual supplies");
+            soldier.getInventory().setItem(0, ItemStack.EMPTY); soldier.getInventory().setItem(1, ItemStack.EMPTY);
+            helper.assertTrue(task.tryStart(helper.getLevel(), soldier, ++time), "removing supplies did not refresh equipment");
+            for (EquipmentSlot slot : SoldierEquipment.SLOTS) helper.assertTrue(soldier.getItemBySlot(slot).isEmpty(), "removed gear remained equipped or regenerated");
+            helper.succeed();
+        }
+    }
+
+    @GameTest(templateNamespace = "minecraft", template = "bastion/blocks/air", timeoutTicks = 180)
+    public static void liveArcherWithDisabledDefaultsFightsBarehanded(GameTestHelper helper) throws Exception {
+        Fixture fixture = fixture(helper);
+        fixture.village().getPolitics().forceRank(fixture.player(), Rank.MONARCH);
+        VillagerEntityMCA soldier = fixture.soldier();
+        soldier.setProfession(ProfessionsMCA.ARCHER);
+        helper.assertTrue(soldier.getSoldierEquipment().toggleDefaultEquipment(fixture.player()), "Monarch toggle was rejected");
+        soldier.tickCount = 2; soldier.setNoAi(false);
+        var target = Objects.requireNonNull(net.minecraft.world.entity.EntityTypes.COW.create(helper.getLevel(), EntitySpawnReason.STRUCTURE));
+        target.setPos(soldier.position().add(5, 0, 0)); target.setNoAi(true);
+        helper.getLevel().addFreshEntity(target);
+        helper.assertTrue(command(fixture, CommandSoldiersMessage.Action.ATTACK, BlockPos.ZERO, target.getUUID().toString(), 0).apply(fixture.player()), "barehanded archer attack order was rejected");
+        helper.runAfterDelay(120, () -> {
+            try {
+                helper.assertTrue(target.getHealth() < target.getMaxHealth(), "archer without a supplied bow failed to use melee combat");
+                for (EquipmentSlot slot : SoldierEquipment.SLOTS) helper.assertTrue(soldier.getItemBySlot(slot).isEmpty(), "live combat regenerated disabled equipment in " + slot);
+                helper.succeed();
+            } finally { target.discard(); fixture.close(); }
+        });
+    }
+
+    @GameTest(templateNamespace = "minecraft", template = "bastion/blocks/air")
+    public static void suppliedEquipmentPersistsAndGeneratedArmorCannotBeWithdrawn(GameTestHelper helper) throws Exception {
+        try (Fixture fixture = fixture(helper)) {
+            fixture.village().getPolitics().forceRank(fixture.player(), Rank.PEASANT);
+            fixture.village().getPolitics().grantCommander(fixture.player().getUUID(), fixture.player().getName().getString(), fixture.player());
+            VillagerEntityMCA soldier = fixture.soldier();
+            soldier.setItemSlot(EquipmentSlot.CHEST, Items.IRON_CHESTPLATE.getDefaultInstance());
+            SoldierInventoryMenu menu = new SoldierInventoryMenu(1, fixture.player().getInventory(), soldier);
+            helper.assertTrue(menu.getSlot(30).getItem().isEmpty(), "generated armor leaked into a withdrawable equipment slot");
+            ItemStack armor = Items.DIAMOND_CHESTPLATE.getDefaultInstance(); armor.setDamageValue(7);
+            menu.getSlot(30).setByPlayer(armor);
+            helper.assertTrue(soldier.getItemBySlot(EquipmentSlot.CHEST) == soldier.getSoldierEquipment().getInventory().getItem(3), "equipped armor was copied instead of sharing the real inventory item");
+            helper.assertTrue(!menu.getSlot(30).mayPlace(Items.BREAD.getDefaultInstance()) && menu.getSlot(30).getMaxStackSize() == 1, "equipment slot accepted food or stacked armor");
+            TagValueOutput saved = TagValueOutput.createWithContext(ProblemReporter.DISCARDING, soldier.registryAccess());
+            soldier.addAdditionalSaveData(saved);
+            VillagerEntityMCA restored = VillagerFactory.newVillager(helper.getLevel()).withAge(0).withPosition(soldier.position()).build();
+            restored.readAdditionalSaveData(TagValueInput.create(ProblemReporter.DISCARDING, restored.registryAccess(), saved.buildResult()));
+            helper.assertTrue(restored.getSoldierEquipment().getInventory().getItem(3).is(Items.DIAMOND_CHESTPLATE)
+                    && restored.getSoldierEquipment().getInventory().getItem(3).getDamageValue() == 7, "saving lost player equipment or its durability");
+            menu.getSlot(30).setByPlayer(ItemStack.EMPTY);
+            helper.assertTrue(soldier.getSoldierEquipment().getInventory().getItem(3).isEmpty(), "removing armor did not remove the owned item");
+            helper.assertTrue(menu.stillValid(fixture.player()), "Commander could not use the soldier inventory");
+            fixture.village().getPolitics().revokeCommander(fixture.player().getUUID());
+            helper.assertTrue(!menu.stillValid(fixture.player()), "role dismissal left an open equipment menu authorized");
+            helper.succeed();
+        }
+    }
+
+    @GameTest(templateNamespace = "minecraft", template = "bastion/blocks/air")
+    public static void loadedArmySnapshotAndVillageLabelsReflectMembership(GameTestHelper helper) throws Exception {
+        try (Fixture fixture = fixture(helper)) {
+            fixture.village().getPolitics().forceRank(fixture.player(), Rank.PEASANT);
+            fixture.village().getPolitics().grantCommander(fixture.player().getUUID(), fixture.player().getName().getString(), fixture.player());
+            fixture.soldier().tickCount = 20; fixture.soldier().getResidency().tick();
+            helper.assertTrue(fixture.soldier().getResidency().getVillageName().equals(fixture.village().getName()), "village name was not synchronized for interactions and nameplates");
+            fixture.village().setName("Renamed village"); fixture.soldier().getResidency().tick();
+            helper.assertTrue(fixture.soldier().getResidency().getVillageName().equals("Renamed village"), "renaming left the old nameplate label");
+            CompoundTag overview = ArmyOverviewRequest.snapshot(fixture.player(), fixture.village());
+            helper.assertTrue(overview.getBoolean("canCommand").orElse(false) && overview.getList("soldiers").orElseThrow().size() == 1,
+                    "army overview omitted the loaded soldier or included a civilian");
+            fixture.soldier().discard();
+            helper.assertTrue(ArmyOverviewRequest.snapshot(fixture.player(), fixture.village()).getList("soldiers").orElseThrow().isEmpty(), "overview retained an unloaded soldier");
+            helper.succeed();
+        }
+    }
+
+    private static CommandSoldiersMessage command(Fixture fixture, CommandSoldiersMessage.Action action, BlockPos position, String target, int value) {
+        return new CommandSoldiersMessage(fixture.village().getId(), action, List.of(fixture.soldier().getUUID()), position, target, value);
+    }
+
+    @GameTest(templateNamespace = "minecraft", template = "bastion/blocks/air", timeoutTicks = 180)
+    public static void liveSoldierPathfindsToOrderedPositionAndStaysThere(GameTestHelper helper) throws Exception {
+        Fixture fixture = fixture(helper);
+        fixture.village().getPolitics().forceRank(fixture.player(), Rank.PEASANT);
+        fixture.village().getPolitics().grantCommander(fixture.player().getUUID(), fixture.player().getName().getString(), fixture.player());
+        VillagerEntityMCA soldier = fixture.soldier();
+        soldier.tickCount = 2;
+        soldier.setNoAi(false);
+        BlockPos destination = fixture.base().south(7).east(5);
+        helper.assertTrue(command(fixture, CommandSoldiersMessage.Action.MOVE_TO, destination, "", 0).apply(fixture.player()), "live move order was rejected");
+        helper.runAfterDelay(120, () -> {
+            try {
+                helper.assertTrue(soldier.blockPosition().distSqr(destination) <= 2.25 && soldier.getVillagerBrain().getMoveState() == MoveState.STAY,
+                        "actual soldier AI failed to reach and hold its destination: " + soldier.blockPosition() + " state=" + soldier.getVillagerBrain().getMoveState());
+                helper.succeed();
+            } finally { fixture.close(); }
+        });
+    }
+
+    @GameTest(templateNamespace = "minecraft", template = "bastion/blocks/air", timeoutTicks = 180)
+    public static void liveSoldierPursuesAndKillsCommandedNeutralMob(GameTestHelper helper) throws Exception {
+        Fixture fixture = fixture(helper);
+        fixture.village().getPolitics().forceRank(fixture.player(), Rank.PEASANT);
+        fixture.village().getPolitics().grantCommander(fixture.player().getUUID(), fixture.player().getName().getString(), fixture.player());
+        VillagerEntityMCA soldier = fixture.soldier();
+        soldier.tickCount = 2;
+        soldier.setNoAi(false);
+        var target = Objects.requireNonNull(net.minecraft.world.entity.EntityTypes.COW.create(helper.getLevel(), EntitySpawnReason.STRUCTURE));
+        target.setPos(soldier.position().add(5, 0, 0)); target.setNoAi(true);
+        helper.getLevel().addFreshEntity(target);
+        helper.assertTrue(command(fixture, CommandSoldiersMessage.Action.ATTACK, BlockPos.ZERO, target.getUUID().toString(), 0).apply(fixture.player()), "live attack order was rejected");
+        helper.runAfterDelay(120, () -> {
+            try {
+                helper.assertTrue(!target.isAlive(), "actual soldier AI did not pursue and kill the commanded neutral mob; health=" + target.getHealth());
+                helper.succeed();
+            } finally { target.discard(); fixture.close(); }
+        });
+    }
+
+    @GameTest(templateNamespace = "minecraft", template = "bastion/blocks/air")
+    public static void soldierEquipmentAndOrdersSurviveZombieConversion(GameTestHelper helper) throws Exception {
+        try (Fixture fixture = fixture(helper)) {
+            fixture.village().getPolitics().forceRank(fixture.player(), Rank.PEASANT);
+            fixture.village().getPolitics().grantCommander(fixture.player().getUUID(), fixture.player().getName().getString(), fixture.player());
+            helper.assertTrue(fixture.soldier().getSoldierEquipment().toggleDefaultEquipment(fixture.player()), "could not disable equipment before conversion");
+            fixture.soldier().getSoldierEquipment().getInventory().setItem(3, Items.DIAMOND_CHESTPLATE.getDefaultInstance());
+            fixture.soldier().getSoldierOrders().goTo(fixture.player(), fixture.base().east(8));
+            ZombieVillagerEntityMCA zombie = Objects.requireNonNull(EntitiesMCA.MALE_ZOMBIE_VILLAGER.create(helper.getLevel(), EntitySpawnReason.STRUCTURE));
+            zombie.copyVillagerAttributesFrom(fixture.soldier());
+            TagValueOutput output = TagValueOutput.createWithContext(ProblemReporter.DISCARDING, zombie.registryAccess());
+            zombie.addAdditionalSaveData(output);
+            ZombieVillagerEntityMCA loaded = Objects.requireNonNull(EntitiesMCA.MALE_ZOMBIE_VILLAGER.create(helper.getLevel(), EntitySpawnReason.STRUCTURE));
+            loaded.readAdditionalSaveData(TagValueInput.create(ProblemReporter.DISCARDING, loaded.registryAccess(), output.buildResult()));
+            loaded.getItemBySlot(EquipmentSlot.CHEST).setDamageValue(23);
+            VillagerEntityMCA cured = VillagerFactory.newVillager(helper.getLevel()).withAge(0).withPosition(fixture.soldier().position()).build();
+            cured.copyVillagerAttributesFrom(loaded);
+            helper.assertTrue(cured.getSoldierEquipment().getInventory().getItem(3).is(Items.DIAMOND_CHESTPLATE)
+                    && cured.getSoldierEquipment().getInventory().getItem(3).getDamageValue() == 23
+                    && cured.getSoldierOrders().getDestination().orElseThrow().equals(fixture.base().east(8)), "conversion lost player gear, durability or orders");
+            helper.assertTrue(!loaded.getTrackedValue(SoldierEquipment.USE_DEFAULT_EQUIPMENT)
+                    && !cured.getSoldierEquipment().usesDefaultEquipment()
+                    && cured.getItemBySlot(cured.getDominantSlot()).isEmpty()
+                    && cured.getItemBySlot(EquipmentSlot.LEGS).isEmpty(), "zombification or curing restored disabled default equipment");
+            helper.succeed();
+        }
+    }
+
+    @GameTest(templateNamespace = "minecraft", template = "bastion/blocks/air")
+    public static void zombieDropsOwnedGearExactlyOnce(GameTestHelper helper) throws Exception {
+        try (Fixture fixture = fixture(helper)) {
+            fixture.soldier().getSoldierEquipment().getInventory().setItem(3, Items.DIAMOND_CHESTPLATE.getDefaultInstance());
+            ZombieVillagerEntityMCA zombie = Objects.requireNonNull(EntitiesMCA.MALE_ZOMBIE_VILLAGER.create(helper.getLevel(), EntitySpawnReason.STRUCTURE));
+            zombie.copyVillagerAttributesFrom(fixture.soldier());
+            zombie.setPos(Vec3.atBottomCenterOf(fixture.base().south(8).east(5)));
+            zombie.setNoAi(true);
+            // Force vanilla's equipment drop path to expose any duplicate inherited armor.
+            zombie.setDropChance(EquipmentSlot.CHEST, 2.0F);
+            helper.getLevel().addFreshEntity(zombie);
+            zombie.hurtServer(helper.getLevel(), helper.getLevel().damageSources().generic(), 1000);
+            var drops = helper.getLevel().getEntitiesOfClass(net.minecraft.world.entity.item.ItemEntity.class, zombie.getBoundingBox().inflate(4),
+                    item -> item.getItem().is(Items.DIAMOND_CHESTPLATE));
+            int count = drops.stream().mapToInt(item -> item.getItem().getCount()).sum();
+            helper.assertTrue(count == 1, "zombification produced " + count + " copies of one owned chestplate");
+            drops.forEach(net.minecraft.world.entity.Entity::discard); zombie.discard();
+            helper.succeed();
+        }
+    }
+
+    @GameTest(templateNamespace = "minecraft", template = "bastion/blocks/air")
+    public static void commanderRoleRequiresEligibleRankAndLeavesCivilProgressionIntact(GameTestHelper helper) throws Exception {
+        try (Fixture fixture = fixture(helper)) {
+            fixture.village().getPolitics().forceRank(fixture.player(), Rank.MONARCH);
+            ServerPlayer officer = mockPlayer(helper, fixture.base());
+            try {
+                fixture.village().getPolitics().forceRank(officer, Rank.OUTLAW);
+                helper.assertTrue(!message(fixture, GovernVillageMessage.Action.GRANT_COMMANDER, officer.getUUID().toString(), 0, 0).apply(fixture.player()),
+                        "an Outlaw could be promoted to Commander");
+                fixture.village().getPolitics().forceRank(officer, Rank.NOBLE);
+                helper.assertTrue(message(fixture, GovernVillageMessage.Action.GRANT_COMMANDER, officer.getUUID().toString(), 0, 0).apply(fixture.player()),
+                        "eligible player could not receive the Commander role");
+                helper.assertTrue(Tasks.getRank(fixture.village(), officer) == Rank.NOBLE && fixture.village().getPolitics().canCommand(officer),
+                        "Commander role replaced the civil rank or did not grant army access");
+                fixture.village().getPolitics().forceRank(officer, Rank.PEASANT);
+                helper.assertTrue(fixture.village().getPolitics().canCommand(officer), "changing an eligible civil rank removed the independent Commander role");
+                helper.assertTrue(GetVillageRequest.canViewRemotely(fixture.village(), officer), "Peasant Commander lost remote village access");
+                helper.assertTrue(!message(fixture, GovernVillageMessage.Action.GRANT_COMMANDER, UUID.randomUUID().toString(), 0, 0).apply(officer),
+                        "Commander could appoint another Commander");
+                fixture.village().getPolitics().banPlayer(officer.getUUID(), officer.getName().getString());
+                helper.assertTrue(!fixture.village().getPolitics().isCommander(officer.getUUID()) && !fixture.village().getPolitics().canCommand(officer),
+                        "banning an officer retained their military role");
+                helper.succeed();
+            } finally { officer.discard(); }
+        }
+    }
+
+    @GameTest(templateNamespace = "minecraft", template = "bastion/blocks/air")
+    public static void legacyCommanderRankMigratesToIndependentRole(GameTestHelper helper) throws Exception {
+        try (Fixture fixture = fixture(helper)) {
+            CompoundTag saved = fixture.village().save();
+            CompoundTag politics = saved.getCompound("politics").orElseThrow();
+            CompoundTag ranks = new CompoundTag();
+            ranks.putString(fixture.player().getUUID().toString(), "COMMANDER");
+            politics.put("forcedRanks", ranks);
+            Village loaded = new Village(saved, helper.getLevel());
+            helper.assertTrue(loaded.getPolitics().isCommander(fixture.player().getUUID())
+                    && loaded.getPolitics().getForcedRank(fixture.player().getUUID()).isEmpty(), "legacy Commander remained a forced civil rank");
+            Rank earned = Tasks.getRank(loaded, fixture.player());
+            helper.assertTrue(earned.isAtLeast(Rank.PEASANT) && loaded.getPolitics().canCommand(fixture.player()), "migration lost army authority or civil progression");
+            Village reloaded = new Village(loaded.save(), helper.getLevel());
+            helper.assertTrue(reloaded.getPolitics().isCommander(fixture.player().getUUID()) && Tasks.getRank(reloaded, fixture.player()) == earned,
+                    "migrated military role did not survive another save/load");
+            helper.succeed();
+        }
+    }
+
+    @GameTest(templateNamespace = "minecraft", template = "bastion/blocks/air")
+    public static void peasantCommanderCannotChangeCivilSettings(GameTestHelper helper) throws Exception {
+        try (Fixture fixture = fixture(helper)) {
+            fixture.village().getPolitics().forceRank(fixture.player(), Rank.PEASANT);
+            fixture.village().getPolitics().grantCommander(fixture.player().getUUID(), fixture.player().getName().getString(), fixture.player());
+            String originalName = fixture.village().getName();
+            float taxes = fixture.village().getTaxes();
+            new net.conczin.mca.network.c2s.RenameVillageMessage(fixture.village().getId(), "Unauthorized rename").handleServer(fixture.player());
+            new net.conczin.mca.network.c2s.SaveVillageMessage(fixture.village().getId(), taxes == 0 ? 1 : 0, 0, 0).handleServer(fixture.player());
+            helper.assertTrue(originalName.equals(fixture.village().getName()) && fixture.village().getTaxes() == taxes,
+                    "Commander role granted Mayor's civil settings permissions");
+            helper.succeed();
+        }
+    }
+
+    @GameTest(templateNamespace = "minecraft", template = "bastion/blocks/air")
+    public static void dismissingCommanderCancelsOutstandingOrders(GameTestHelper helper) throws Exception {
+        try (Fixture fixture = fixture(helper)) {
+            fixture.village().getPolitics().forceRank(fixture.player(), Rank.PEASANT);
+            fixture.village().getPolitics().grantCommander(fixture.player().getUUID(), fixture.player().getName().getString(), fixture.player());
+            fixture.soldier().getSoldierOrders().goTo(fixture.player(), fixture.base().south(9).east(5));
+            helper.assertTrue(fixture.soldier().getSoldierOrders().hasDestination(), "fixture had no pending move order");
+            fixture.village().getPolitics().revokeCommander(fixture.player().getUUID());
+            fixture.soldier().tickCount = 20;
+            fixture.soldier().getSoldierOrders().tick();
+            helper.assertTrue(!fixture.soldier().getSoldierOrders().hasDestination()
+                    && fixture.soldier().getVillagerBrain().getMoveState() == MoveState.STAY, "dismissed officer's orders kept running");
+            helper.succeed();
+        }
+    }
+
+    @GameTest(templateNamespace = "minecraft", template = "bastion/blocks/air")
+    public static void commandShortcutPrefersAuthorityOverCurrentGeographicVillage(GameTestHelper helper) throws Exception {
+        try (Fixture fixture = fixture(helper); Fixture foreign = fixture(helper, fixtureOrigin(helper).east(200))) {
+            fixture.village().getPolitics().forceRank(fixture.player(), Rank.PEASANT);
+            fixture.village().getPolitics().grantCommander(fixture.player().getUUID(), fixture.player().getName().getString(), fixture.player());
+            fixture.player().setPos(Vec3.atBottomCenterOf(foreign.base()));
+            helper.assertTrue(GetVillageRequest.resolveVillage(fixture.player(), -1, true).orElseThrow().getId() == fixture.village().getId(),
+                    "left-click shortcut opened the foreign village's army instead of the commanded village");
+            helper.assertTrue(GetVillageRequest.resolveVillage(fixture.player(), -1, false).orElseThrow().getId() == foreign.village().getId(),
+                    "ordinary blueprint no longer opened the geographic village");
+            helper.succeed();
+        }
+    }
+
+    @GameTest(templateNamespace = "minecraft", template = "bastion/blocks/air")
+    public static void qualifiedSecondPlayerCannotReplaceExistingMonarch(GameTestHelper helper) throws Exception {
+        try (Fixture fixture = fixture(helper)) {
+            fixture.village().getPolitics().forceRank(fixture.player(), Rank.MONARCH);
+            ServerPlayer candidate = mockPlayer(helper, fixture.base());
+            var tasks = Tasks.getInstance().tasks;
+            var monarchRequirements = tasks.put(Rank.MONARCH, List.of());
+            var mayorRequirements = tasks.put(Rank.MAYOR, List.of());
+            try {
+                helper.assertTrue(Tasks.getRank(fixture.village(), candidate) == Rank.MAYOR,
+                        "a qualified second player displaced the Monarch instead of receiving the highest lower eligible rank");
+                helper.assertTrue(fixture.village().getPolitics().getMonarch().orElseThrow().equals(fixture.player().getUUID())
+                        && Tasks.getRank(fixture.village(), fixture.player()) == Rank.MONARCH, "the existing owner's throne changed");
+                helper.succeed();
+            } finally {
+                tasks.put(Rank.MONARCH, monarchRequirements);
+                tasks.put(Rank.MAYOR, mayorRequirements);
+                candidate.discard();
+            }
+        }
     }
 
     private static void close(GameTestHelper helper, double actual, double expected, String description) {

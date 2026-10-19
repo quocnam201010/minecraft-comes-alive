@@ -32,6 +32,10 @@ public record SaveVillageMessage(
     @Override
     public void handleServer(ServerPlayer player) {
         VillageManager.get(player.level()).getOrEmpty(id).ifPresent(village -> {
+            if (!net.conczin.mca.resources.Tasks.getRank(village, player).isAtLeast(net.conczin.mca.resources.Rank.MAYOR)
+                    || !Float.isFinite(taxes) || !Float.isFinite(populationThreshold) || !Float.isFinite(marriageThreshold)
+                    || taxes < 0 || taxes > 1 || populationThreshold < 0 || populationThreshold > 1
+                    || marriageThreshold < 0 || marriageThreshold > 1) return;
             village.setTaxes(taxes);
             village.setPopulationThreshold(populationThreshold);
             village.setMarriageThreshold(marriageThreshold);

@@ -133,10 +133,15 @@ public class VillagerTasksMCA {
 
         boolean noDefault = false;
 
-        if (brain.getMemoryInternal(MemoryModuleTypeMCA.STAYING).isPresent()) {
+        if (villager.getSoldierOrders() != null && villager.getSoldierOrders().hasDestination() && villager.isGuard()) {
+            brain.addActivity(Activity.CORE, VillagerTasksMCA.getImportantCorePackage(0.5f), ImmutableSet.of(), ImmutableSet.of());
+            brain.addActivity(Activity.CORE, VillagerTasksMCA.getGuardCorePackage(villager), ImmutableSet.of(), ImmutableSet.of());
+            noDefault = true;
+        } else if (brain.getMemoryInternal(MemoryModuleTypeMCA.STAYING).isPresent()) {
             brain.addActivity(Activity.CORE, VillagerTasksMCA.getStayingPackage(), ImmutableSet.of(), ImmutableSet.of());
             brain.addActivity(Activity.CORE, VillagerTasksMCA.getImportantCorePackage(0.5f), ImmutableSet.of(), ImmutableSet.of());
-            brain.addActivity(Activity.CORE, VillagerTasksMCA.getSelfDefencePackage(), ImmutableSet.of(), ImmutableSet.of());
+            brain.addActivity(Activity.CORE, villager.isGuard() ? VillagerTasksMCA.getGuardCorePackage(villager)
+                    : VillagerTasksMCA.getSelfDefencePackage(), ImmutableSet.of(), ImmutableSet.of());
             brain.addActivity(Activity.PANIC, VillagerTasksMCA.getPanicPackage(0.5F), ImmutableSet.of(), ImmutableSet.of());
             noDefault = true;
         } else if (brain.getMemoryInternal(MemoryModuleTypeMCA.PLAYER_FOLLOWING).isPresent()) {
@@ -415,6 +420,8 @@ public class VillagerTasksMCA {
     }
 
     private static boolean shouldKeepAttackTarget(VillagerEntityMCA villager, LivingEntity target) {
+        if (!villager.getSoldierOrders().canEngage(target)) return false;
+        if (villager.getSoldierOrders().isOrderedTarget(target)) return true;
         if (villager.getBrain().isMemoryValue(MemoryModuleTypeMCA.ARMY_ATTACK_TARGET, target)
                 && !VillagePolitics.isEnemy(villager, target)) {
             return false;

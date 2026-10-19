@@ -144,6 +144,11 @@ public class VillagerEntityMCA extends Villager implements VillagerLike<Villager
     private final BreedableRelationship relations = new BreedableRelationship(this);
     private final VillagerCommandHandler interactions = new VillagerCommandHandler(this);
     private final UpdatableInventory inventory = new UpdatableInventory(27);
+    private final SoldierEquipment soldierEquipment = new SoldierEquipment(this);
+    private final net.conczin.mca.entity.ai.SoldierOrders soldierOrders = new net.conczin.mca.entity.ai.SoldierOrders(this);
+
+    public SoldierEquipment getSoldierEquipment() { return soldierEquipment; }
+    public net.conczin.mca.entity.ai.SoldierOrders getSoldierOrders() { return soldierOrders; }
     private final VillagerDimensions.Mutable dimensions = new VillagerDimensions.Mutable(AgeState.UNASSIGNED);
     long lastCooldown = 0L;
     private PlayerModel playerModel;
@@ -223,7 +228,7 @@ public class VillagerEntityMCA extends Villager implements VillagerLike<Villager
     }
 
     public static <E extends Entity> CDataManager.Builder<E> createTrackedData(CDataManager.Builder<E> builder) {
-        return VillagerLike.createTrackedData(builder).addAll(INFECTION_PROGRESS, PhysicalHealth.VALUE)
+        return VillagerLike.createTrackedData(builder).addAll(INFECTION_PROGRESS, PhysicalHealth.VALUE, SoldierEquipment.USE_DEFAULT_EQUIPMENT)
                 .add(Residency::createTrackedData)
                 .add(BreedableRelationship::createTrackedData);
     }
@@ -1052,6 +1057,7 @@ public class VillagerEntityMCA extends Villager implements VillagerLike<Villager
     public void tick() {
         super.tick();
         physicalHealth.tick();
+        soldierOrders.tick();
         mcaBrain.tickPanicAnimation();
 
         int visualAge = getVisualAge();
@@ -1409,6 +1415,7 @@ public class VillagerEntityMCA extends Villager implements VillagerLike<Villager
 
         //drop stuff
         InventoryUtils.dropAllItems(this, inventory);
+        InventoryUtils.dropAllItems(this, soldierEquipment.getInventory());
 
         //alert family and nearby villagers
         relations.onDeath(cause);
@@ -1637,6 +1644,11 @@ public class VillagerEntityMCA extends Villager implements VillagerLike<Villager
     @Nullable
     @Override
     public AbstractContainerMenu createMenu(int i, Inventory playerInventory, Player playerEntity) {
+        if (isGuard()) {
+            if (!(playerEntity instanceof ServerPlayer serverPlayer) || (!playerEntity.isCreative()
+                    && !net.conczin.mca.entity.ai.SoldierOrders.canCommand(serverPlayer, this))) return null;
+            return new SoldierInventoryMenu(i, playerInventory, this);
+        }
         return ChestMenu.threeRows(i, playerInventory, inventory);
     }
 
@@ -1860,6 +1872,9 @@ public class VillagerEntityMCA extends Villager implements VillagerLike<Villager
         // Reapply the saved value after restoring those bonuses so a reload cannot remove earned HP.
         if (Float.isFinite(savedHealth)) setHealth(savedHealth);
         InventoryUtils.readFromNBT(this.registryAccess(), inventory, nbt);
+        soldierOrders.load(nbt);
+        soldierEquipment.load(nbt);
+        if (soldierOrders.hasDestination() && level() instanceof ServerLevel serverLevel) refreshBrain(serverLevel);
 
         if (nbt.contains("DespawnDelay")) {
             this.despawnDelay = nbt.getIntOr("DespawnDelay", this.despawnDelay);
@@ -1917,6 +1932,8 @@ public class VillagerEntityMCA extends Villager implements VillagerLike<Villager
 
         nbt.putInt("DespawnDelay", this.despawnDelay);
         physicalHealth.save(nbt);
+        soldierOrders.save(nbt);
+        soldierEquipment.save(nbt);
         nbt.putBoolean("InteractedWith", this.interactedWith);
 
         if (interactedWith) {
@@ -1963,6 +1980,8 @@ public class VillagerEntityMCA extends Villager implements VillagerLike<Villager
     @Override
     public void writeAdditionalConversionData(CompoundTag output) {
         physicalHealth.save(output);
+        soldierOrders.save(output);
+        soldierEquipment.save(output);
         output.putString(CHAT_AI_PROMPT_KEY, chatAIPrompt);
         writeNicknames(output);
         longTermMemory.writeToNbt(output);
@@ -1971,6 +1990,8 @@ public class VillagerEntityMCA extends Villager implements VillagerLike<Villager
     @Override
     public void readAdditionalConversionData(CompoundTag input) {
         physicalHealth.load(input);
+        soldierOrders.load(input);
+        soldierEquipment.load(input);
         chatAIPrompt = input.getString(CHAT_AI_PROMPT_KEY).orElse("");
         readNicknames(input);
         longTermMemory.readFromNbt(input);

@@ -18,6 +18,9 @@ public final class PhysicalHealth {
     public static final int MAXIMUM = 1000;
     public static final int CYCLE_TICKS = 7 * 60 * 20;
     public static final int DECAY = 30;
+    public static final double MAX_HEALTH_BONUS = 40.0D;
+    public static final double MAX_ATTACK_DAMAGE_BONUS = 2.0D;
+    public static final double MAX_MOVEMENT_SPEED_BONUS = 0.1D;
     public static final String TIMER_KEY = "PhysicalHealthLoadedTicks";
     public static final CDataParameter<Integer> VALUE = CParameter.create("PhysicalHealth", 0);
     private static final Identifier MODIFIER = MCA.locate("physical_health");
@@ -28,6 +31,9 @@ public final class PhysicalHealth {
 
     public int get() { return Math.clamp(villager.getTrackedValue(VALUE), 0, MAXIMUM); }
     public int getLoadedTicks() { return loadedTicks; }
+    public double getMaxHealthBonus() { return MAX_HEALTH_BONUS * get() / MAXIMUM; }
+    public double getAttackDamageBonus() { return MAX_ATTACK_DAMAGE_BONUS * get() / MAXIMUM; }
+    public double getMovementSpeedBonus() { return MAX_MOVEMENT_SPEED_BONUS * get() / MAXIMUM; }
 
     public void set(int value) {
         villager.setTrackedValue(VALUE, Math.clamp(value, 0, MAXIMUM));
@@ -45,10 +51,9 @@ public final class PhysicalHealth {
 
     private void updateAttributes() {
         if (villager.level().isClientSide()) return;
-        double fraction = get() / (double) MAXIMUM;
-        modifier(Attributes.MAX_HEALTH, 40.0D * fraction, AttributeModifier.Operation.ADD_VALUE);
-        modifier(Attributes.ATTACK_DAMAGE, 2.0D * fraction, AttributeModifier.Operation.ADD_VALUE);
-        modifier(Attributes.MOVEMENT_SPEED, 0.1D * fraction, AttributeModifier.Operation.ADD_MULTIPLIED_TOTAL);
+        modifier(Attributes.MAX_HEALTH, getMaxHealthBonus(), AttributeModifier.Operation.ADD_VALUE);
+        modifier(Attributes.ATTACK_DAMAGE, getAttackDamageBonus(), AttributeModifier.Operation.ADD_VALUE);
+        modifier(Attributes.MOVEMENT_SPEED, getMovementSpeedBonus(), AttributeModifier.Operation.ADD_MULTIPLIED_TOTAL);
         if (villager.getHealth() > villager.getMaxHealth()) villager.setHealth(villager.getMaxHealth());
     }
 

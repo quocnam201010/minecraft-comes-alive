@@ -105,6 +105,15 @@ public class BlueprintScreen extends ExtendedScreen {
     private ButtonWidget buttonPage;
     private List<Map.Entry<Integer, String>> governanceVillages = List.of();
     private List<Map.Entry<UUID, String>> governancePlayers = List.of();
+    private List<Map.Entry<Integer, String>> managedVillages = List.of();
+    private int managedVillagePage;
+    private Rank appointmentRank = Rank.MAYOR;
+    private boolean commandAuthority;
+    private boolean commanderRole;
+    private boolean openCommandOnLoad;
+    private boolean remoteView;
+    private net.minecraft.nbt.ListTag soldierMarkers = new net.minecraft.nbt.ListTag();
+    private int armyRefreshTicks;
     private int foreignVillageIndex;
     private int playerChoiceIndex;
     private int banListPage;
@@ -156,7 +165,12 @@ public class BlueprintScreen extends ExtendedScreen {
     private Map<Rank, List<Task>> tasks;
 
     public BlueprintScreen() {
+        this(false);
+    }
+
+    public BlueprintScreen(boolean openCommandOnLoad) {
         super(Component.literal("Blueprint"));
+        this.openCommandOnLoad = openCommandOnLoad;
     }
 
     static void onClientLevelChanged(Object levelIdentity) {
@@ -215,7 +229,7 @@ public class BlueprintScreen extends ExtendedScreen {
     @Override
     public void init() {
         if (needsVillageRequestOnInit()) {
-            Network.sendToServer(new GetVillageRequest());
+            Network.sendToServer(new GetVillageRequest(-1, openCommandOnLoad));
             setPage("waiting");
             return;
         }
@@ -258,18 +272,30 @@ public class BlueprintScreen extends ExtendedScreen {
         int bx = width / 2 - MAP_NAVIGATION_OFFSET;
         int by = height / 2 - 56;
         if (!page.equals("rename") && (!page.equals("empty") && !page.equals("waiting"))) {
-            for (String p : new String[]{"map", "rank", "catalog", "villagers", "rules", "army", "food"}) {
-                ButtonWidget widget = new ButtonWidget(bx, by, NAVIGATION_WIDTH, 20, Component.translatable("gui.blueprint." + p), b -> setPage(p));
+            int navigationIndex = 0;
+            for (String p : new String[]{"map", "rank", "catalog", "villagers", "rules", "army", "food", "council", "realm", "command"}) {
+                int navigationY = by + (navigationIndex < 7 ? navigationIndex * 22 : (navigationIndex - 10) * 21);
+                ButtonWidget widget = new ButtonWidget(bx, navigationY, NAVIGATION_WIDTH, 20, Component.translatable("gui.blueprint." + p), b -> {
+                    if (p.equals("command") && village != null) minecraft.gui.setScreen(new CommandScreen(this, village));
+                    else setPage(p);
+                });
+                if (p.equals("command")) widget.active = rank == Rank.MONARCH || commandAuthority;
                 addRenderableWidget(widget);
                 if (page.equals(p) || ("advanced".equals(page) && "map".equals(p))
                         || ("army_villages".equals(page) && "army".equals(p))) {
                     widget.active = false;
                 }
-                by += 22;
+                navigationIndex++;
             }
         }
 
         switch (page) {
+            case "realm":
+                createRealmControls();
+                break;
+            case "council":
+                createCouncilControls();
+                break;
             case "army", "army_villages":
                 createArmyControls();
                 break;
@@ -342,7 +368,14 @@ public class BlueprintScreen extends ExtendedScreen {
                     }
                 });
 
-                if ("advanced".equals(page)) {
+                if (remoteView) {
+                    playerCenteredButton.active = false;
+                    SideControlColumn column = new SideControlColumn(bx, layoutY - 56);
+                    if (canGovern()) column.addButton(Component.translatable("gui.blueprint.autoScan"), b ->
+                            govern(GovernVillageMessage.Action.AUTO_SCAN, "", village.isAutoScan() ? 0 : 1, 0, List.of()));
+                    if (rank != null && rank.isAtLeast(Rank.MAYOR))
+                        column.addButton(Component.translatable("gui.blueprint.renameVillage"), b -> setPage("rename"));
+                } else if ("advanced".equals(page)) {
                     // Advanced is a map sub-view: expose settlement-level settings while
                     // preserving the shared map display controls above.
                     SideControlColumn column = new SideControlColumn(bx, layoutY - 56);
@@ -501,6 +534,12 @@ public class BlueprintScreen extends ExtendedScreen {
     }
 
     @Override
+    public void tick() {
+        if (village != null && ++armyRefreshTicks % 20 == 0 && ("map".equals(page) || "advanced".equals(page)))
+            Network.sendToServer(new net.conczin.mca.network.c2s.ArmyOverviewRequest(village.getId()));
+    }
+
+    @Override
     public void extractRenderState(GuiGraphicsExtractor context, int sizeX, int sizeY, float offset) {
         if (village != null && ("map".equals(page) || "advanced".equals(page))) {
             updateMapControls(getPlayerRoomScanPlan());
@@ -518,7 +557,6 @@ public class BlueprintScreen extends ExtendedScreen {
             case "empty" ->
                     context.centeredText(font, Component.translatable("gui.blueprint.empty"), width / 2, layoutBaseY() - 20, 0xffaaaaaa);
             case "map" -> {
-                renderStats(context);
                 renderName(context);
                 renderMap(context, offset);
             }
@@ -533,12 +571,72 @@ public class BlueprintScreen extends ExtendedScreen {
             case "catalog" -> renderCatalog(context);
             case "villagers" -> renderVillagers(context);
             case "rules" -> renderRules(context);
-            case "army", "army_villages", "food" -> renderGovernance(context);
+            case "army", "army_villages", "food", "council" -> renderGovernance(context);
         }
 
     }
 
     private boolean canGovern() { return rank == Rank.MONARCH && village != null; }
+
+    private void createRealmControls() {
+        int x = width / 2 - 78, y = height / 2 - 80;
+        governanceButton(x, y, 216, Component.translatable("gui.blueprint.realm.local"), () -> {
+            soldierMarkers.clear();
+            Network.sendToServer(new GetVillageRequest());
+            setPage("waiting");
+        });
+        managedVillagePage = Math.clamp(managedVillagePage, 0, Math.max(0, (managedVillages.size() - 1) / 6));
+        for (int row = 0; row < 6; row++) {
+            int index = managedVillagePage * 6 + row;
+            if (index >= managedVillages.size()) break;
+            var selected = managedVillages.get(index);
+            governanceButton(x, y + 27 + row * 22, 216, Component.literal(selected.getValue() + " (#" + selected.getKey() + ")"), () -> {
+                soldierMarkers.clear();
+                playerCentered = false;
+                Network.sendToServer(new GetVillageRequest(selected.getKey()));
+                setPage("waiting");
+            });
+        }
+        governanceButton(x, y + 164, 106, Component.literal("<"), () -> { managedVillagePage--; setPage(page); });
+        governanceButton(x + 110, y + 164, 106, Component.literal(">"), () -> { managedVillagePage++; setPage(page); });
+    }
+
+    private void createCouncilControls() {
+        if (!canGovern()) return;
+        int x = width / 2 - 78, y = height / 2 - 80;
+        EditBox field = addRenderableWidget(new EditBox(font, x, y, 216, 20, Component.translatable("gui.blueprint.army.player")));
+        field.setMaxLength(128);
+        field.setHint(Component.translatable("gui.blueprint.army.player"));
+        field.setValue(playerBanDraft);
+        field.setResponder(value -> playerBanDraft = value);
+        governanceButton(x, y + 24, 216, Component.translatable("gui.blueprint.army.choose_player"), () -> {
+            if (!governancePlayers.isEmpty()) {
+                playerBanDraft = governancePlayers.get(Math.floorMod(playerChoiceIndex++, governancePlayers.size())).getValue();
+                setPage(page);
+            }
+        });
+        governanceButton(x, y + 52, 216, Component.translatable(appointmentRank.getTranslationKey()), () -> {
+            appointmentRank = Rank.values()[appointmentRank.ordinal() % (Rank.MONARCH.ordinal() - 1) + 1];
+            setPage(page);
+        });
+        governanceButton(x, y + 76, 216, Component.translatable("gui.blueprint.council.appoint"),
+                () -> govern(GovernVillageMessage.Action.APPOINT_RANK, field.getValue().strip(), appointmentRank.ordinal(), 0, List.of()));
+        governanceButton(x, y + 112, 216, Component.translatable("gui.blueprint.council.transfer"), () ->
+                minecraft.gui.setScreen(new net.minecraft.client.gui.screens.ConfirmScreen(confirmed -> {
+                    minecraft.gui.setScreen(this);
+                    if (confirmed) govern(GovernVillageMessage.Action.TRANSFER_CROWN, playerBanDraft.strip(), 0, 0, List.of());
+                }, Component.translatable("gui.blueprint.council.transfer"),
+                        Component.translatable("gui.blueprint.council.transfer.confirm", field.getValue()))));
+        governanceButton(x, y + 142, 216, Component.translatable("gui.blueprint.council.grant_commander"),
+                () -> govern(GovernVillageMessage.Action.GRANT_COMMANDER, field.getValue().strip(), 0, 0, List.of()))
+                .setTooltip(Tooltip.create(Component.translatable("gui.blueprint.council.commander_requirement")));
+        governanceButton(x, y + 166, 216, Component.translatable("gui.blueprint.council.revoke_commander"),
+                () -> govern(GovernVillageMessage.Action.REVOKE_COMMANDER, field.getValue().strip(), 0, 0, List.of()));
+    }
+
+    public void setArmyOverview(int villageId, CompoundTag data) {
+        if (village != null && village.getId() == villageId) soldierMarkers = data.getList("soldiers").orElseGet(net.minecraft.nbt.ListTag::new);
+    }
 
     private void govern(GovernVillageMessage.Action action, String target, int value, int flags, List<String> professions) {
         if (canGovern()) Network.sendToServer(new GovernVillageMessage(village.getId(), action, target, value, flags, professions));
@@ -666,6 +764,18 @@ public class BlueprintScreen extends ExtendedScreen {
     }
 
     public void setGovernanceDirectory(CompoundTag data) {
+        commandAuthority = data.getBoolean("CanCommand").orElse(rank == Rank.MONARCH);
+        commanderRole = data.getBoolean("CommanderRole").orElse(false);
+        CompoundTag managed = data.getCompound("ManagedVillages").orElseGet(CompoundTag::new);
+        List<Map.Entry<Integer, String>> accessible = new ArrayList<>();
+        for (String key : managed.keySet()) {
+            try { accessible.add(Map.entry(Integer.parseInt(key), managed.getString(key).orElse(key))); }
+            catch (IllegalArgumentException ignored) { }
+        }
+        accessible.sort(Map.Entry.comparingByValue());
+        managedVillages = List.copyOf(accessible);
+        remoteView = data.getBoolean("RemoteView").orElse(false);
+        if (remoteView) playerCentered = false;
         CompoundTag villages = data.getCompound("VillageDirectory").orElseGet(CompoundTag::new);
         List<Map.Entry<Integer, String>> villageEntries = new ArrayList<>();
         for (String key : villages.keySet()) {
@@ -685,7 +795,11 @@ public class BlueprintScreen extends ExtendedScreen {
         foodAccessDraft = null;
         foodProfessionsDraft = null;
         foodBudgetDraft = -1;
-        if ("army".equals(page) || "army_villages".equals(page) || "food".equals(page)) setPage(page);
+        setPage(page);
+        if (openCommandOnLoad && village != null) {
+            openCommandOnLoad = false;
+            minecraft.gui.setScreen(new CommandScreen(this, village));
+        }
     }
 
     private static ReportBuildingMessage.Action getStructureScanAction(Village.RoomScanMode mode) {
@@ -880,6 +994,7 @@ public class BlueprintScreen extends ExtendedScreen {
         context.text(font, Component.translatable("gui.blueprint.reputation", String.valueOf(reputation)), x, y + 11, rank.ordinal() == 0 ? 0xffff0000 : 0xffffffff);
         context.text(font, Component.translatable("gui.blueprint.buildings", structureCount), x, y + 22, 0xffffffff);
         context.text(font, Component.translatable("gui.blueprint.population", village.getPopulation(), village.getMaxPopulation()), x, y + 33, 0xffffffff);
+        if (commanderRole) context.text(font, Component.translatable("gui.blueprint.commander_role"), x, y + 44, 0xff55ddff);
     }
 
     private void renderMap(GuiGraphicsExtractor context, float partialTick) {
@@ -914,6 +1029,12 @@ public class BlueprintScreen extends ExtendedScreen {
                 mouseY
         );
         renderPlayerHeadButtonIcon(context, player);
+        for (int i = 0; i < soldierMarkers.size(); i++) {
+            CompoundTag soldier = soldierMarkers.getCompound(i).orElseGet(CompoundTag::new);
+            int x = (int) viewport.screenX(soldier.getDouble("x").orElse(0D));
+            int y = (int) viewport.screenY(soldier.getDouble("z").orElse(0D));
+            if (viewport.containsInner(x, y)) context.fill(x - 1, y - 1, x + 2, y + 2, 0xff55ddff);
+        }
 
         List<BlueprintMapRenderer.HoverTarget> hoverTargets = tooltipTargets(
                 renderResult.hoverTargets(), renderResult.hoveredLogicalBuildingId());

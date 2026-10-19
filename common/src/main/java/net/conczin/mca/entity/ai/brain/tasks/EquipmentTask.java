@@ -27,6 +27,7 @@ public class EquipmentTask extends Behavior<VillagerEntityMCA> {
     private final Function<VillagerEntityMCA, EquipmentSet> equipmentSet;
     private int lastEquipTime;
     private boolean lastArmorWearState;
+    private boolean lastDefaultEquipmentState = true;
     private int lastEquipmentRefreshTick = -EQUIPMENT_REFRESH_INTERVAL;
     private EquipmentSet cachedEquipmentSet;
     private boolean conditionEvaluatedDuringCheck;
@@ -45,6 +46,10 @@ public class EquipmentTask extends Behavior<VillagerEntityMCA> {
         equipmentResolvedDuringCheck = false;
         if (villager.isUsingRecoveryFood()) {
             return false;
+        }
+        if (lastDefaultEquipmentState != villager.getSoldierEquipment().usesDefaultEquipment()) return true;
+        if (!villager.getSoldierEquipment().usesDefaultEquipment()) {
+            return villager.getSoldierEquipment().needsSuppliedEquipmentRefresh();
         }
         //armor visibility settings have been changed
         if (lastArmorWearState != villager.getVillagerBrain().getArmorWear()) {
@@ -99,6 +104,11 @@ public class EquipmentTask extends Behavior<VillagerEntityMCA> {
         boolean reuseCheckedEquipment = equipmentResolvedDuringCheck;
         equipmentResolvedDuringCheck = false;
         if (villager.isUsingRecoveryFood()) {
+            return;
+        }
+        lastDefaultEquipmentState = villager.getSoldierEquipment().usesDefaultEquipment();
+        if (!lastDefaultEquipmentState) {
+            villager.getSoldierEquipment().applySuppliedEquipment();
             return;
         }
         lastArmorWearState = villager.getVillagerBrain().getArmorWear();
@@ -156,6 +166,7 @@ public class EquipmentTask extends Behavior<VillagerEntityMCA> {
             villager.setItemSlot(EquipmentSlot.LEGS, ItemStack.EMPTY);
             villager.setItemSlot(EquipmentSlot.FEET, ItemStack.EMPTY);
         }
+        villager.getSoldierEquipment().apply();
     }
 
     private static boolean isNakedCombatSet(EquipmentSet set, VillagerEntityMCA villager) {
@@ -189,8 +200,10 @@ public class EquipmentTask extends Behavior<VillagerEntityMCA> {
     }
 
     private static boolean isMissingRequestedHandItem(VillagerEntityMCA villager, EquipmentSet set) {
-        return isMissingRequestedItem(villager.getItemBySlot(villager.getDominantSlot()), set.getMainHand())
-                || isRequestedItem(set.getGetOffHand()) && villager.getItemBySlot(villager.getOpposingSlot()).isEmpty();
+        return !villager.getSoldierEquipment().has(villager.getDominantSlot())
+                && isMissingRequestedItem(villager.getItemBySlot(villager.getDominantSlot()), set.getMainHand())
+                || !villager.getSoldierEquipment().has(villager.getOpposingSlot())
+                && isRequestedItem(set.getGetOffHand()) && villager.getItemBySlot(villager.getOpposingSlot()).isEmpty();
     }
 
     private static boolean isMissingRequestedItem(ItemStack equipped, Item requested) {
